@@ -1,0 +1,522 @@
+---
+title: CRISPR Off Target Analysis
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = "html_output"
+    )
+  })
+---
+```{r include = FALSE}
+library(data.table)
+library(VariantAnnotation)
+library(parallel)
+library(DT)
+library(htmltools)
+library(ggplot2)
+library(httpgd)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(org.Hs.eg.db)
+```
+
+
+## Off Targets {.tabset .tabset-fade .tabset-pills}
+
+### Intro
+
+#### Data.table linking samples to groups
+
+##### Rational:
+Let's create a table where the samples in the VCF are associated with a group representing a set
+of clones carrying the same CRISPR edit type.
+
+##### Strategy:
+1. Get the samples from one of the VCF header
+2. Define what samples are part of the parental group
+3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
+4. Using REGEXP, assign a unique group to each sample
+
+```{r}
+## Set a table of sample to group from one of the VCF file
+vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
+
+## Read Hanqin csv file for the samples
+samplesDT <- setDT(read.csv("supporting_files/iSCORE-PD_cells_grouped_with_guides.csv"))
+
+## Print the table of samples
+datatable(samplesDT)
+```
+
+### Unique Snps
+
+#### Find SNPs common to a set of samples
+
+##### Strategy:
+1. Read the VCF for a given chromosome
+2. Remove the SNPs with a Qual less than 30
+3. Subset the SNPs for the samples of a given group
+4. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
+5. Define the sample part of the univers. ie all samples excluding EWTs
+6. If a sample is part of the meta colums, remove the samples of the meta from the universeSnps
+7. Subset the SNPs for the samples of a given group
+8. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
+9. Returns the SNPs in the Group not present in the Universe
+
+```{r}
+getSubsetFilter <- function(vcf, samples, qual) {
+  subset <- as.data.frame(geno(vcf)$GT[, samples])
+  filter <- !apply(subset, 1, function(x) all(x %in% c("./.", "0/0", "./0", "0/."))) & qual(vcf) >= qual
+  return(filter)
+}
+
+getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
+  ## Read the VCF
+  vcf <- readVcf(vcf.file)
+
+  groups <- samplesDT[group != "parental", unique(group), ]
+  ## Roll through the groups and get their unique SNPs
+  results <- lapply(groups, function(currGroup) {
+    ## Get the sample names of the group under analysis
+    currSamples <- samplesDT[currGroup == group, sample]
+    currUniverse <- samplesDT[-grep(paste0("(", currGroup, "|EWT)"), group), sample]
+    ## Remove the meta samples for the EWTs...
+    if (!is.na(unique(samplesDT[group == currGroup, meta]))) {
+      metaSamples <- samplesDT[meta %in% samplesDT[group == currGroup, meta], sample]
+      currUniverse <- currUniverse[!currUniverse %in% metaSamples]
+    }
+
+    groupSnp_f <- getSubsetFilter(vcf, currSamples, qual)
+    universeSnps_f <- getSubsetFilter(vcf, currUniverse, qual)
+
+    ## Subset the vcf to the group SNPS
+    uniqueSnps <- vcf[groupSnp_f & !universeSnps_f]
+
+    return(uniqueSnps)
+  })
+
+  names(results) <- groups
+  return(results)
+}
+```
+
+#### Computing the unique SNPs for each group
+
+##### Rational:
+Now that we have the underlying algorithm, it's time to roll over every VCF file for each choromsome
+(For a gain of speed, we'll do that using parallel computing) and we will massage the data to return 
+something consumable
+
+##### Strategy:
+1. Define the parental samples
+2. Find the VCF files
+4. Reading the header of one VCF file, get the group tags
+5. In parallel, computed the unique SNPs VCF and stats
+6. Massage the data for compsution (and save the VCF to HD)
+
+```{r}
+## Only run if data files are no present
+resultToSave <- file.path("data", "cas-offinder_unique_SNPs_vs_all.Rds")
+vcfToSave <- file.path("data", "cas-offinder_unique_SNPs_vs_all.vcf")
+if (file.exists(resultToSave) && file.exists(vcfToSave)) {
+  groupUniqueSnps <- readRDS(resultToSave)
+} else {
+  rawResults <- mclapply(vcf.files,
+    getUniqueSnps,
+    samplesDT = samplesDT,
+    qual = 30,
+    mc.cores = detectCores(),
+    mc.preschedule = FALSE
+  )
+
+  groupUniqueSnps <- mclapply(names(rawResults[[1]]), function(group) {
+    res <- do.call(rbind, lapply(rawResults, "[[", group))
+    return(res)
+  }, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+  names(groupUniqueSnps) <- names(rawResults[[1]])
+
+  allUniqueVCF <- unique(do.call(rbind, groupUniqueSnps))
+
+  dir.create("data", showWarnings = FALSE)
+  saveRDS(groupUniqueSnps, resultToSave)
+  writeVcf(allUniqueVCF, vcfToSave)
+}
+```
+
+### sgRNA
+
+#### Load the table of sgRNA from Hanqin
+
+```{R}
+sgRNA <- setDT(read.delim("./supporting_files/sgRNA.txt", header = FALSE))
+
+datatable(sgRNA) %>%
+  formatStyle(c("V1"), fontFamily = "monospace, monospace")
+```
+
+#### Run cas-offinder
+
+*This is how I ran cas-offinder on the GPU based instance in us-east-1 zone*
+
+```{bash eval=FALSE}
+cas-offinder sgRNA.txt G cas-offinder-out.txt
+```
+
+
+#### Load the results of cas-offinder
+
+*Display only the first 50 results to avoid bloating the HTML report*
+
+```{r}
+casOff <- setDT(read.table("./supporting_files/cas-offinder-out.txt"))
+setnames(casOff, c("PAM", "chr", "start", "seq", "strand", "mismatch", "id"))
+
+casOff[strand == "-", start := start + 3]
+casOff[strand == "+", start := start + nchar(seq) - 3]
+
+casOffGR <- GRanges(
+  seqnames = casOff[, chr],
+  IRanges(casOff[, start], width = 1),
+  strand = casOff[, strand],
+  data.frame(seq = casOff[, seq], guide = casOff[, id], mismatch = casOff[, mismatch], PAM = casOff[, PAM])
+)
+
+datatable(head(casOff, 50)) %>%
+  formatStyle(c("PAM", "seq"), fontFamily = "monospace, monospace")
+```
+
+
+#### Is cas-offinder hits the targeted gene?
+
+```{r warning=FALSE, message=FALSE}
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
+
+symbol2ez <- select(org.Hs.eg.db, targetGenes, "ENTREZID", "SYMBOL")
+symbol2ez[is.na(symbol2ez$ENTREZID), ]$ENTREZID <- select(
+  org.Hs.eg.db,
+  symbol2ez[is.na(symbol2ez$ENTREZID), ]$SYMBOL, "ENTREZID", "ALIAS"
+)$ENTREZID
+
+ol <- findOverlaps(casOffGR, genes[symbol2ez$ENTREZID], ignore.strand = TRUE)
+
+dt <- setDT(as.data.frame(ol))
+dt$guide <- casOffGR[queryHits(ol)]$guide
+dt$overlappingGene <- symbol2ez$SYMBOL[subjectHits(ol)]
+
+datatable(dt[order(dt$guide), .(guide, overlappingGene)], options = list(pageLength = 10))
+```
+
+#### Is the targeted gene by the CRISP found in the cas-offinder results
+
+```{r}
+dt.m1 <- melt(samplesDT,
+  measure.vars = c("guide1", "guide2", "guide3"),
+  variable.name = "guide",
+  value.name = "guideId"
+)
+dt.m1[, guideId := sub(" ", "_", guideId)]
+dt.m1[grep("EWT|parental", group, invert = TRUE), gene := sub("-.+", "", group)]
+
+gene2guide <- unique(dt.m1[, .(gene, group, guideId)])
+gene2guide <- gene2guide[!is.na(gene)]
+
+dt$targetGene <- gene2guide[match(dt$guide, guideId), gene]
+
+datatable(dt[order(factor(guide)), .(casOffInTargetGene = any(unique(targetGene) %in% overlappingGene)), by = guide],
+  options = list(pageLength = 25)
+)
+```
+
+#### cas-offinder hits within targeted genes
+
+Let's output the location, sequences and mismatches of the cas-offinder results falling within the targeted genes.
+
+```{r}
+subCasOffGR <- casOffGR[dt[overlappingGene == targetGene, queryHits]]
+
+f <- unlist(tapply(subCasOffGR$mismatch, subCasOffGR$guide, function(x) x == min(x)))
+order <- order(factor(subCasOffGR$guide))
+
+datatable(
+  data.table(
+    guide = subCasOffGR$guide[order],
+    chr = as.character(seqnames(subCasOffGR))[order],
+    start = start(subCasOffGR)[order],
+    strand = as.character(strand(subCasOffGR))[order],
+    PAM = subCasOffGR$PAM[order],
+    seq = subCasOffGR$seq[order],
+    mismatch = subCasOffGR$mismatch[order]
+  )[f],
+  options = list(pageLength = 25)
+) %>%
+  formatStyle(c("PAM", "seq"), fontFamily = "monospace, monospace")
+```
+
+### Dist stats
+
+#### Rational:
+
+##### how to compute a p-value if we find SNPs close to predicted off target site. 
+
+The chance that a SNPs fall in any 100 bp window is the same for any window, it's a uniform distribution accross the 
+chromosome lenght. The rate at wich a SNPs should fall within the same 100bp window as a predicted CRISPR off target site is then
+one over the size of the chomosome divided by 100 bp times the number of off-target sites on that chromosome (ie any one 100 bp as
+the same probability of getting a SNPs in any given window).
+Then with the predicted rate, we can use the poisson distribution to compute the probabiltiy of seeing
+a given number of observation.
+
+#### Strategy
+1. Roll over the unique SNPs for each group of edited cell lines
+2. Get the guide(s) used to edited the cell lines
+3. Roll over each chromosomes with SNPs on them
+4. Compute the number of 100 bp window for a given chromosome
+5. Compute the rate of having a SNPs within a given windows
+6. Remove the SNPs falling within the targeted gene
+6. Count the number of SNPs wihtin 100 bp to a predicted CRIPSR off target site
+7. Compute the p-value from a Poisson distribution of event at a given rate
+
+```{r message=FALSE}
+binSize <- 100
+
+dt.m1 <- melt(samplesDT,
+  measure.vars = c("guide1", "guide2", "guide3"),
+  variable.name = "guide",
+  value.name = "guideId"
+)
+dt.m1[, guideId := sub(" ", "_", guideId)]
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
+symbol2ez <- select(org.Hs.eg.db, targetGenes, "ENTREZID", "SYMBOL")
+symbol2ez[is.na(symbol2ez$ENTREZID), ]$ENTREZID <- select(
+  org.Hs.eg.db,
+  symbol2ez[is.na(symbol2ez$ENTREZID), ]$SYMBOL, "ENTREZID", "ALIAS"
+)$ENTREZID
+
+dd <- do.call(rbind, mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+
+  targetedGene <- sub("-.+", "", subGroup <- sub("EWT-", "", currGroup))
+  whithinTargetedGene <- findOverlaps(
+    genes[symbol2ez$ENTREZID[symbol2ez$SYMBOL == targetedGene]],
+    casOffGR,
+    ignore.strand = TRUE
+  )
+  casOffOutsideGene <- casOffGR[-subjectHits(whithinTargetedGene)]
+
+  guides <- dt.m1[group == currGroup, unique(guideId)[unique(guideId) != ""]]
+  if (length(guides) == 0) {
+    return(data.table())
+  }
+
+  ## Get the chomosome name that has SNPs
+  chrs <- table(seqnames(vcf))
+  chrs <- names(chrs[chrs > 0])
+
+  dd <- do.call(rbind, lapply(chrs, function(currChr) {
+    subCasOffGR <- casOffOutsideGene[seqnames(casOffOutsideGene) == currChr & casOffOutsideGene$guide %in% guides]
+    chrLength <- seqlengths(vcf)[currChr]
+    rate <- 1 / (chrLength / binSize) * sum(seqnames(subCasOffGR) == currChr)
+
+    casOffStarts <- start(subCasOffGR)
+    snpsStarts <- start(vcf[seqnames(vcf) == currChr])
+
+    ## If no cas-offinder hits, return early
+    if (length(casOffStarts) == 0) {
+      return(data.table())
+    }
+
+    dists <- sapply(casOffStarts, function(start) min(abs(start - snpsStarts)))
+
+    data.table(
+      chr = currChr,
+      close2offTarget = sum(dists <= binSize),
+      predictedRate = rate
+    )
+  }))
+
+  dd[, .(group = currGroup, events = sum(close2offTarget), rate = mean(predictedRate))]
+}, mc.cores = detectCores(), mc.preschedule = FALSE))
+
+dd <- dd[!is.na(rate)]
+dd[events > 0, p.value.num := 1 - ppois(events, rate)]
+dd[!is.na(p.value.num), p.value := format(p.value.num, digits = 3, scientific = TRUE)]
+
+datatable(dd[, `:=`(rate = NULL, p.value.num = NULL)], options = list(pageLength = 25))
+```
+
+#### Should I trust the p-values
+
+Ok, if this is true, doing this anlysis with a CRISPR guide RNA that is not the one used for the edited cell line
+should not returned significant values. Let's try it.
+
+#### Strategy
+
+1. Use same code as above but reset the guides to a random sample of guides other than the original for the group
+2. Repeat that 10 times and return the count of events per iteration for each group
+
+
+```{r}
+binSize <- 100
+
+dt.m1 <- melt(samplesDT,
+  measure.vars = c("guide1", "guide2", "guide3"),
+  variable.name = "guide",
+  value.name = "guideId"
+)
+dt.m1[, guideId := sub(" ", "_", guideId)]
+
+dd <- do.call(rbind, lapply(1:10, function(i) {
+  dd <- do.call(rbind, mclapply(names(groupUniqueSnps), function(currGroup) {
+    subGroup <- sub("EWT-", "", currGroup)
+
+    guides <- dt.m1[group == currGroup, unique(guideId)[unique(guideId) != ""]]
+
+    if (length(guides) == 0) {
+      return(data.table())
+    }
+    vcf <- groupUniqueSnps[[currGroup]]
+
+    ## randomly sample same number of guides not the original guides
+    guides <- sample(dt.m1[, unique(guideId)[!unique(guideId) %in% c(guides, "")]], length(guides))
+
+    ## Get the chomosome name that has SNPs
+    chrs <- table(seqnames(vcf))
+    chrs <- names(chrs[chrs > 0])
+
+    dd <- do.call(rbind, lapply(chrs, function(currChr) {
+      chrLength <- seqlengths(vcf)[currChr]
+
+      rate <- 1 / (chrLength / binSize) * length(casOff[chr == currChr])
+
+      starts <- start(vcf[seqnames(vcf) == currChr])
+      dist <- sapply(starts, function(currStart) min(abs(casOff[chr == currChr & id %in% guides, start] - currStart)))
+
+      data.table(
+        chr = currChr,
+        close2offTarget = sum(dist <= binSize),
+        predictedRate = rate
+      )
+    }))
+
+    dd[, .(group = currGroup, events = sum(close2offTarget), rate = mean(predictedRate))]
+  }, mc.cores = detectCores(), mc.preschedule = FALSE))
+  dd[, iter := paste0("iter_", i)]
+}))
+
+datatable(dcast(dd, group ~ iter, value.var = "events"), options = list(pageLength = 25))
+```
+
+#### Location of cas-offinder hits falling within 100 bp of a unique SNPs
+
+##### Strategy:
+
+1. Roll over the unique SNPs for each group of edited cell lines
+2. Get the guide(s) used to edited the cell lines
+3. Roll over each chromosomes with SNPs on them
+
+```{r message=FALSE}
+binSize <- 100
+
+dt.m1 <- melt(samplesDT,
+  measure.vars = c("guide1", "guide2", "guide3"),
+  variable.name = "guide",
+  value.name = "guideId"
+)
+dt.m1[, guideId := sub(" ", "_", guideId)]
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
+symbol2ez <- select(org.Hs.eg.db, targetGenes, "ENTREZID", "SYMBOL")
+symbol2ez[is.na(symbol2ez$ENTREZID), ]$ENTREZID <- select(
+  org.Hs.eg.db,
+  symbol2ez[is.na(symbol2ez$ENTREZID), ]$SYMBOL, "ENTREZID", "ALIAS"
+)$ENTREZID
+
+dd <- do.call(rbind, mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+
+  targetedGene <- sub("-.+", "", subGroup <- sub("EWT-", "", currGroup))
+  whithinTargetedGene <- findOverlaps(
+    genes[symbol2ez$ENTREZID[symbol2ez$SYMBOL == targetedGene]],
+    casOffGR,
+    ignore.strand = TRUE
+  )
+  casOffOutsideGene <- casOffGR[-subjectHits(whithinTargetedGene)]
+
+  guides <- dt.m1[group == currGroup, unique(guideId)[unique(guideId) != ""]]
+  if (length(guides) == 0) {
+    return(data.table())
+  }
+
+  ## Get the chomosome name that has SNPs
+  chrs <- table(seqnames(vcf))
+  chrs <- names(chrs[chrs > 0])
+
+  dd <- do.call(rbind, lapply(chrs, function(currChr) {
+    subCasOffGR <- casOffOutsideGene[seqnames(casOffOutsideGene) == currChr & casOffOutsideGene$guide %in% guides]
+
+    casOffStarts <- start(subCasOffGR)
+    snpsStarts <- start(vcf[seqnames(vcf) == currChr])
+
+    ## If no cas-offinder hits, return early
+    if (length(casOffStarts) == 0) {
+      return(data.table())
+    }
+
+    dists <- sapply(casOffStarts, function(start) min(abs(start - snpsStarts)))
+
+    f.casOff <- dists <= binSize
+    f.vcf <- sapply(snpsStarts, function(start) min(abs(start - casOffStarts)) <= binSize)
+    if (sum(f.casOff) == 0) {
+      return(data.table())
+    }
+
+    dt <- data.table(
+      group = currGroup,
+      guide = subCasOffGR$guide,
+      chr = as.character(seqnames(subCasOffGR)),
+      "cas-off start" = start(subCasOffGR),
+      strand = as.character(strand(subCasOffGR)),
+      PAM = subCasOffGR$PAM,
+      seq = subCasOffGR$seq,
+      mismatch = subCasOffGR$mismatch,
+      dist = dists
+    )[f.casOff]
+
+    dt$"SNP start" <- start(vcf[seqnames(vcf) == currChr][f.vcf])
+    dt$REF <- as.character(ref(vcf[seqnames(vcf) == currChr][f.vcf]))
+    dt$ALT <- sapply(alt(vcf[seqnames(vcf) == currChr][f.vcf]), paste0, collapse = ",")
+
+    samples <- samplesDT[group == currGroup, sample]
+    colFilt <- colnames(geno(vcf[seqnames(vcf) == currChr][f.vcf])$GT) %in% samples
+    geno <- data.frame(geno(vcf[seqnames(vcf) == currChr][f.vcf])$GT)[, colFilt]
+    dt$GT <- apply(geno, 1, function(x) paste0(unique(x[!x %in% c("0/0", "./.", "./0", "0/.")]), collapse = "\n"))
+    dt$sample <- apply(geno, 1, function(x) paste0(names(x)[!x %in% c("0/0", "./.", "./0", "0/.")], collapse = "\n"))
+    return(dt)
+  }))
+}, mc.cores = detectCores(), mc.preschedule = FALSE))
+
+datatable(dd[order(group)]) %>%
+  formatStyle(c("PAM", "seq"), fontFamily = "monospace, monospace")
+```
+
+### sessionInfo
+```{r}
+sessionInfo()
+```

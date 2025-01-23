@@ -1,0 +1,349 @@
+---
+title: Comparative analysis of mutation load in different CRISPR edited cell lines in 
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = "html_output"
+    )
+  })
+---
+```{r include = FALSE}
+options(java.parameters = "-Xmx90G")
+library(httpgd)
+library(VariantAnnotation)
+library(data.table)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(org.Hs.eg.db)
+library(parallel)
+library(DT)
+library(htmltools)
+library(ggplot2)
+library(fastreeR)
+library(ape)
+library(gridExtra)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+hgd()
+```
+
+## By Edit Method {.tabset .tabset-pills}
+
+### Intro
+
+#### Data.table linking samples to groups
+
+##### Rational:
+Let's create a table where the samples in the VCF are associated with a group representing a set
+of clones carrying the same CRISPR edit type.
+
+##### Strategy:
+1. Get the samples from one of the VCF header
+2. Define what samples are part of the parental group
+3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
+4. Using REGEXP, assign a unique group to each sample
+
+```{r}
+## Set a table of sample to group from one of the VCF file
+vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
+
+## Read Hanqin csv file for the samples
+samplesDT <- setDT(read.csv("supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv"))
+
+samplesDT[, group := editing_group]
+samplesDT[, editing_group := NULL]
+
+## Remove the Talen edited cell line
+samplesDT <- samplesDT[group != "TALEN", ]
+
+## Print the table of samples
+datatable(samplesDT)
+```
+
+### Unique Snps
+
+#### Find SNPs common to a set of samples
+
+##### Strategy:
+1. Read the VCF for a given chromosome
+2. Remove the SNPs with a Qual less than 30
+3. Subset the SNPs for the samples of a given group
+4. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
+5. Define the sample part of the univers. ie all samples excluding EWTs
+6. If a sample is part of the meta colums, remove the samples of the meta from the universeSnps
+7. Subset the SNPs for the samples of a given group
+8. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
+9. Returns the SNPs in the Group not present in the Universe
+
+```{r}
+getSubsetFilter <- function(vcf, samples, qual) {
+  subset <- as.data.frame(geno(vcf)$GT[, samples])
+  filter <- !apply(subset, 1, function(x) all(x %in% c("./.", "0/0", "./0", "0/."))) & qual(vcf) >= qual
+  return(filter)
+}
+
+getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
+  ## Read the VCF
+  vcf <- readVcf(vcf.file)
+
+  groups <- samplesDT[group != "parental", unique(group), ] # nolint: object_usage_linter.
+  ## Roll through the groups and get their unique SNPs
+  results <- lapply(groups, function(currGroup) {
+    ## Get the sample names of the group under analysis
+    currSamples <- samplesDT[group == currGroup, samples] # nolint: object_usage_linter.
+    currUniverse <- samplesDT[group == "parental", samples] # nolint: object_usage_linter.
+
+    groupSnp_f <- getSubsetFilter(vcf, currSamples, qual)
+    universeSnps_f <- getSubsetFilter(vcf, currUniverse, qual)
+
+    ## Subset the vcf to the group SNPS
+    uniqueSnps <- vcf[groupSnp_f & !universeSnps_f]
+
+    return(uniqueSnps)
+  })
+
+  names(results) <- groups
+  return(results)
+}
+```
+
+#### Computing the unique SNPs for each group
+
+##### Rational:
+Now that we have the underlying algorithm, it's time to roll over every VCF file for each choromsome
+(For a gain of speed, we'll do that using parallel computing) and we will massage the data to return 
+something consumable
+
+##### Strategy:
+1. Define the parental samples
+2. Find the VCF files
+4. Reading the header of one VCF file, get the group tags
+5. In parallel, computed the unique SNPs VCF and stats
+6. Massage the data for compsution (and save the VCF to HD)
+
+```{r}
+## Only run if data files are no present
+resultToSave <- file.path("data", "edit_type_unique_SNPs_vs_all.Rds")
+vcfToSave <- file.path("data", "edit_type_unique_SNPs_vs_all.vcf")
+if (file.exists(resultToSave) && file.exists(vcfToSave)) {
+  groupUniqueSnps <- readRDS(resultToSave)
+} else {
+  rawResults <- mclapply(vcf.files,
+    getUniqueSnps,
+    samplesDT = samplesDT,
+    qual = 30,
+    mc.cores = detectCores(),
+    mc.preschedule = FALSE
+  )
+
+  groupUniqueSnps <- mclapply(names(rawResults[[1]]), function(group) {
+    res <- do.call(rbind, lapply(rawResults, "[[", group))
+    return(res)
+  }, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+  names(groupUniqueSnps) <- names(rawResults[[1]])
+
+  allUniqueVCF <- unique(do.call(rbind, groupUniqueSnps))
+
+  dir.create("data", showWarnings = FALSE)
+  saveRDS(groupUniqueSnps, resultToSave)
+  writeVcf(allUniqueVCF, vcfToSave)
+}
+```
+
+
+#### Save the unique SNPs as a VCF file
+
+##### Rational:
+the Unique SNPs ar now in a series of ExpandedVCF object, one for each group. Let's create a CompactedVCF with these SNPs
+
+#### Total of unique SNPs per group:
+
+Let's reformat the table to display counts of SNPs per group per chromosome.
+
+```{r}
+dt <- data.table(
+  group = rep(names(groupUniqueSnps), sapply(groupUniqueSnps, length)),
+  chr = do.call(c, lapply(groupUniqueSnps, function(x) as.character(seqnames(x))))
+)
+
+counts <- dt[, .N, by = .(group, chr)]
+
+dt2 <- dcast(counts, group ~ chr, value.var = "N")
+dt2[, total := sum(.SD), by = group]
+dt2 <- dt2[samplesDT[group != "parental", .N, by = group], on = .(group)]
+dt2[, mean := round(total / N)]
+
+dt2 <- dt2[
+  order(factor(group,
+    levels = c(
+      grep("EWT", unique(group), value = TRUE),
+      grep("EWT", unique(group), value = TRUE, invert = TRUE)
+    )
+  )),
+  c("group", "N", "total", "mean", paste0("chr", c(1:22, "X")))
+]
+dt2
+```
+
+
+### Intersections
+
+#### Computing the distribution of alleles per sample combination
+
+##### Rational:
+* For each group, what is the number of SNPs shared among the samples
+
+##### Strategy:
+1. for each SNP, assign a group ID representing the combination of samples carrying that SNP
+
+```{r fig.width = 12}
+pps <- lapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+  currSamples <- samplesDT[group == currGroup, samples]
+  dt <- cbind(
+    allele = rownames(geno(vcf)$GT),
+    data.table(geno(vcf)$GT)[, ..currSamples]
+  )
+  geno <- melt(
+    dt,
+    id.vars = "allele",
+    measure.vars = currSamples,
+    variable.name = "sample",
+    value.name = "geno"
+  )
+  geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
+  samples <- geno[, unique(sample)]
+
+  if (length(samples) > 26) {
+    codes <- c(
+      LETTERS[seq_along(samples)[1:26]],
+      sapply(LETTERS[seq_along(samples[27:length(samples)])], function(x) paste(rep(x, 2), collapse = ""))
+    )
+  } else {
+    codes <- LETTERS[seq_along(samples)]
+  }
+
+  void <- lapply(seq_along(codes), function(i) {
+    geno[sample == samples[i], sub := codes[i]]
+  })
+
+  combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
+  combn <- unique(combi)
+  combn <- combn[order(elementNROWS(strsplit(combn, "-")))]
+  combi <- factor(combi, levels = combn)
+
+  df <- as.data.frame(table(combi))
+
+  p_bar <- ggplot(df, aes(combi, Freq)) +
+    geom_col() +
+    labs(title = paste("Sample", currGroup)) +
+    theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust = 1))
+
+  legend <- data.frame(legend = paste(codes, samples, sep = " = "))
+
+  p_tab <- tableGrob(unname(legend),
+    theme = ttheme_default(base_size = 8),
+    rows = NULL
+  )
+
+  grid.arrange(grobs = list(p_bar, p_tab), ncol = 2, widths = c(3, 1))
+})
+```
+
+
+#### Saving the intersection  as a table
+
+##### Common SNPs within the Cas9 type of edit
+
+```{r results ='asis'}
+pps <- mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+  currSamples <- samplesDT[group == currGroup, samples]
+  dt <- cbind(
+    allele = rownames(geno(vcf)$GT),
+    data.table(geno(vcf)$GT)[, ..currSamples]
+  )
+  geno <- melt(
+    dt,
+    id.vars = "allele",
+    measure.vars = currSamples,
+    variable.name = "sample",
+    value.name = "geno"
+  )
+  geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
+  samples <- geno[, unique(sample)]
+
+  if (length(samples) > 26) {
+    codes <- c(
+      LETTERS[seq_along(samples)[1:26]],
+      sapply(LETTERS[seq_along(samples[27:length(samples)])], function(x) paste(rep(x, 2), collapse = ""))
+    )
+  } else {
+    codes <- LETTERS[seq_along(samples)]
+  }
+
+  void <- lapply(seq_along(codes), function(i) {
+    geno[sample == samples[i], sub := codes[i]]
+  })
+
+  combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
+  combn <- unique(combi)
+  combn <- combn[order(elementNROWS(strsplit(combn, "-")))]
+  combi <- factor(combi, levels = combn)
+
+  dt <- data.table(Combination = combi)
+
+  dt1 <- dt[!is.na(Combination), .N, by = Combination]
+  dt1[, nSample := elementNROWS(strsplit(as.character(Combination), "-"))]
+  dt1 <- dt1[order(factor(Combination, levels = combn))]
+  legend <- data.table(Code = codes, Sample = samples)
+
+  list(legend = legend, dt1 = dt1)
+})
+
+names(pps) <- names(groupUniqueSnps)
+
+
+for (currGroup in names(pps)) {
+  cat("\n")
+  cat("#### Number of SNPs shared among the", currGroup, "edited cell lines\n")
+  cat("##### Id to sample legend\n")
+  print(tagList(datatable(pps[[currGroup]]$legend)))
+  cat("##### Number of SNPs per combination for", currGroup, "\n")
+  print(tagList(datatable(pps[[currGroup]]$dt1)))
+  cat("\n")
+}
+```
+
+
+### Phylo Tree
+
+#### Computing the phylogenic relationship of the different cell lines
+
+##### Rational:
+Now that we have the underlying algorithm, it's time to roll over every VCF file for each choromsome
+(For a gain of speed, we'll do that using parallel computing) and we will massage the data to return 
+something consumable
+
+##### Strategy:
+1. Define the parental samples
+2. Find the VCF files
+4. Reading the header of one VCF file, get the group tags
+5. In parallel, computed the unique SNPs VCF and stats
+6. Massage the data for compsution (and save the VCF to HD)
+
+#### Phylogenetic tree from only the SNPs unique to the edited cell lines
+
+```{r fig.height=10, fig.width=10, echo=FALSE, warning=FALSE}
+myVcfDist <- fastreeR::vcf2dist(inputFile = vcfToSave, threads = 2)
+myVcfTree <- fastreeR::dist2tree(inputDist = myVcfDist)
+
+plot(ape::read.tree(text = myVcfTree), direction = "rightwards", cex = 0.8)
+ape::add.scale.bar()
+ape::axisPhylo(side = 3)
+```
+

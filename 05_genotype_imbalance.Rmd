@@ -1,0 +1,302 @@
+---
+title: GT discrepencies
+output:
+  html_document:
+    df_print: paged
+    code_folding: show
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = "html_output"
+    )
+  })
+---
+```{r include = FALSE}
+options(java.parameters = "-Xmx90G")
+library(httpgd)
+library(VariantAnnotation)
+library(data.table)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(org.Hs.eg.db)
+library(parallel)
+library(DT)
+library(htmltools)
+library(ggplot2)
+library(fastreeR)
+library(ape)
+library(gridExtra)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+```
+
+## GT imbalances {.tabset .tabset-fade .tabset-pills}
+
+### Intro
+
+#### Data.table linking samples to groups
+
+##### Rational:
+Let's create a table where the samples in the VCF are associated with a group representing a set
+of clones carrying the same CRISPR edit type.
+
+##### Strategy:
+1. Get the samples from one of the VCF header
+2. Define what samples are part of the parental group
+3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
+4. Using REGEXP, assign a unique group to each sample
+
+```{r include=FALSE}
+## Set a table of sample to group from one of the VCF file
+vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
+## define the parents
+parents <- "WIBR3_parental"
+## create the association table
+samplesDT <- data.table(samples = samples(scanVcfHeader(vcf.files[1])))
+
+## UPDATE 12/20/24
+## Cells to remove
+cells2Remove <- c("WIBR3_PLA2G6_D331Y_A4_C2", "WIBR3_PLA2G6_E11_5", "WIBR3_ATP13A2_FS_Homo_12_2")
+samplesDT <- samplesDT[!samples %in% cells2Remove]
+
+samplesDT[, tmp := samples]
+samplesDT[grep("SNCA", samples), tmp := sub("SNCA_", "SNCA-", samples)]
+samplesDT[grep("VPS13C", samples), tmp := sub("VPS13C_", "VPS13C-", samples)]
+samplesDT[, group := sub(".+?_(.+?)_.+", "\\1", tmp)]
+
+## UPDATE 12/20/24
+## Reasign groups
+samplesDT[samples == "WIBR3_VPS13C_FS_Homo_H3_1", group := "VPS13C-A444P"]
+samplesDT[samples == "WIBR3_VPS13C_FS_Homo_E10_2", group := "VPS13C-W395C"]
+
+samplesDT[samples %in% parents, group := "parental"]
+samplesDT[grep("EWT_S(4|5)", samples), group := "EWT-GBA1"]
+samplesDT[grep("EWT_S(1|2|3)", samples), group := "EWT-SNCA-A30P"]
+samplesDT[grep("EWT_S(6|7|8)", samples), group := "EWT-OTHERS"]
+samplesDT[grep("WIBR3_S\\d", samples), group := "S_Group"]
+samplesDT[, tmp := NULL]
+
+## Adding a meta column to group the EWT and the correspoding edit cells
+meta <- samplesDT[grep("EWT", group), sub("EWT-", "", group)]
+samplesDT[grep("EWT", group), meta := sub("EWT-", "", group)]
+samplesDT[group %in% meta, meta := group]
+
+## Print the table of samples
+datatable(samplesDT)
+```
+
+### GT Analysis
+
+#### Rational
+
+Many SNPs in the sampeles have more than one GT, more than the number of unique SNPs. What's going on?
+
+#### Fraction of samples carying the same genotypes
+
+Ok, Let's look at chromosome 1 only 
+```{r}
+vcf <- readVcf(vcf.files[1])
+
+groups <- samplesDT[!group %in% c("parental", "EWT"), unique(group), ]
+
+## Get the sample names of the group under analysis
+currUniverse <- samplesDT[-grep("EWT", group), samples]
+
+asSNPs <- apply(geno(vcf)$GT[, currUniverse], 1, function(x) !all(x %in% c("./.", "0/0", "./0", "0/.")))
+
+vcf_with_snps <- vcf[asSNPs & qual(vcf) >= 30]
+
+asSameGT <- apply(geno(vcf_with_snps)$GT[, currUniverse], 1, function(x) length(unique(x)) == 1)
+
+## Fraction of SNPs that have the same GT over all the samples
+sum(asSameGT) / length(asSameGT)
+```
+
+#### Franction of SNPs where all genotypes have an uncalled allele
+```{r}
+geno <- geno(vcf_with_snps[!asSameGT])$GT[, currUniverse]
+
+lvls <- combn(0:4, 2, paste, collapse = "/")
+lvls <- c(lvls, sapply(0:4, function(x) paste(rep(x, 2), collapse = "/")))
+
+unique_geno <- apply(geno, 1, function(x) unique(x[-grep("\\.", x, )]))
+
+## Franction of SNPs where all genotypes have an uncalled allele
+sum(!elementNROWS(unique_geno) > 1) / length(unique_geno)
+```
+
+#### Number of unique GT that have calls
+```{r}
+unique_geno <- unique_geno[elementNROWS(unique_geno) > 1]
+length(unique_geno)
+```
+
+#### Fraction of GT transition from Het->Homo (or vice versa)
+
+Turns out that a large fraction of the discordant GT are transition between Het and Homo.
+
+```{r warning=FALSE}
+dt1 <- data.table(
+  snp = names(unique_geno),
+  gts = sapply(unique_geno, function(x) paste(factor(x, levels = lvls), collapse = "|"))
+)
+
+dt <- data.table(table(sapply(unique_geno, function(x) paste(factor(x, levels = lvls), collapse = "|"))))
+setnames(dt, "V1", "gts")
+dt[, gtCount := elementNROWS(strsplit(gts, "\\|"))]
+dt[, alleleCount := unlist(lapply(strsplit(gts, "\\||/"), function(x) length(unique(x))))]
+dt[, homo2het := "No"]
+dt[!(alleleCount > 2 | gtCount > 2), homo2het := lapply(strsplit(gts, "\\|"), function(y) {
+  yss <- lapply(strsplit(y, "/"), unique)
+  if (any(yss[[1]] %in% yss[[2]] | yss[[2]] %in% yss[[1]])) "yes"
+})]
+
+dt[order(factor(homo2het, levels = c("yes", "no")))]
+
+dt[homo2het == "yes", sum(N)] / dt[, sum(N)]
+```
+
+Most likely, the source of these transitions are homologous DNA repair, where during replication, a break hapened
+and is being recessed then repaired by the homolgous chromatid. Any Het SNPs in within the recessed region will be
+converted to the reciprocal allele, converting the site from Het to Homo
+
+### Dist Analysis
+
+#### Distribution of distances between any 2 SNPs
+
+If the hypothesis is true, there's a greather likely hood to transition SNPs from Het to Homo that are closer to each others.
+Let's look at that.
+
+```{r}
+homo_2_het_snps <- dt1[gts %in% dt[homo2het == "yes", gts], snp]
+start1 <- start(vcf[homo_2_het_snps])
+start2 <- c(start1[-1], seqlengths(vcf)[unique(seqnames(vcf))])
+
+df <- data.frame(
+  dist2next = start2 - start1,
+  type = "homo2het"
+)
+
+not_homo_2_het_snps <- dt1[!gts %in% dt[homo2het == "yes", gts], snp]
+start3 <- start(vcf[not_homo_2_het_snps])
+start4 <- c(start3[-1], seqlengths(vcf)[unique(seqnames(vcf))])
+
+df <- rbind(df, data.frame(
+  dist2next = start4 - start3,
+  type = "notHomo2het"
+))
+
+p <- ggplot(df, aes(log10(dist2next), color = type)) +
+  geom_density()
+
+print(p)
+```
+
+### Read Depth
+
+#### Computing the Read Depth distrubtion for Major vs Minor Genotypes
+
+Let's take the SNPs that have samples with genotyp transitions from het to homo and look at the read depth coverage from the sample correspoding
+to the major GT (ie samples from the group with most of one of the two GT) compare to the samples with the minor GT (ie sample
+from the group wiht the least of one of the two GT). Also, as a control, let's sample the compute the read coverage from SNPs where all 
+the genotypes are identical (well do some sampling here to reduce the size of the finale data frame).
+
+```{r}
+df <- do.call(rbind, mclapply(dt[homo2het == "yes" & N > 10, gts], function(currCase) {
+  gts <- strsplit(currCase, "\\|")[[1]]
+  currVcf <- vcf[dt1[gts == currCase, snp], currUniverse]
+
+  majorDP <- unlist(sapply(seq_len(length(currVcf)), function(i) {
+    major <- which.max(c(sum(geno(currVcf)$GT[i, ] == gts[1]), sum(geno(currVcf)$GT[i, ] == gts[2])))
+    f <- geno(currVcf)$GT[i, ] == gts[major]
+    geno(currVcf)$DP[i, f]
+  }))
+
+  minorDP <- unlist(sapply(seq_len(length(currVcf)), function(i) {
+    major <- which.min(c(sum(geno(currVcf)$GT[i, ] == gts[1]), sum(geno(currVcf)$GT[i, ] == gts[2])))
+    f <- geno(currVcf)$GT[i, ] == gts[major]
+    geno(currVcf)$DP[i, f]
+  }))
+
+  f <- apply(geno(vcf[, currUniverse])$GT, 1, function(x) length(unique(x)) == 1 && unique(x) %in% gts)
+  uniqueDP <- as.vector(geno(vcf[f][sample(sum(f), length(currVcf))])$DP)
+
+  df <- data.frame(
+    DP = c(majorDP, minorDP, uniqueDP),
+    sample = c(
+      rep("Major GT", length(majorDP)),
+      rep("Minor GT", length(minorDP)),
+      rep("Unique GT", length(uniqueDP))
+    )
+  )
+}, mc.preschedule = FALSE, mc.cores = detectCores()))
+
+p <- ggplot(df, aes(DP, color = sample)) +
+  geom_density() +
+  xlim(0, 60) +
+  labs(
+    title = "Distributions of squencing depth (deepVariant DP) between samples from major, minor, or common GT",
+    x = "Read Deapth"
+  )
+
+print(p)
+tapply(df$DP, df$sample, summary)
+```
+
+#### Computing the Allelic Read Depth Ratio for Major vs Minor Genotypes
+
+Looking at same SNPs as above but computing the ration of read depth for one allele compare to the other allele
+
+
+```{r}
+df <- do.call(rbind, mclapply(dt[homo2het == "yes" & N > 10, gts], function(currCase) {
+  gts <- strsplit(currCase, "\\|")[[1]]
+  currVcf <- vcf[dt1[gts == currCase, snp], currUniverse]
+
+  majorAD <- unlist(sapply(seq_len(length(currVcf)), function(i) {
+    major <- which.max(c(sum(geno(currVcf)$GT[i, ] == gts[1]), sum(geno(currVcf)$GT[i, ] == gts[2])))
+    f <- geno(currVcf)$GT[i, ] == gts[major]
+    AD <- geno(currVcf)$AD[i, f]
+    sapply(AD, function(x) x[1] / sum(x))
+  }))
+
+  minorAD <- unlist(sapply(seq_len(length(currVcf)), function(i) {
+    minor <- which.min(c(sum(geno(currVcf)$GT[i, ] == gts[1]), sum(geno(currVcf)$GT[i, ] == gts[2])))
+    f <- geno(currVcf)$GT[i, ] == gts[minor]
+    AD <- geno(currVcf)$AD[i, f]
+    sapply(AD, function(x) x[1] / sum(x))
+  }))
+
+  f <- apply(geno(vcf[, currUniverse])$GT, 1, function(x) length(unique(x)) == 1 && unique(x) %in% gts)
+  sampleVcf <- vcf[f][sample(sum(f), length(currVcf))]
+
+  uniqueAD <- unlist(sapply(seq_len(length(sampleVcf)), function(i) {
+    AD <- geno(sampleVcf)$AD[i, ]
+    sapply(AD, function(x) x[1] / sum(x))
+  }))
+
+  df <- data.frame(
+    AD = c(majorAD, minorAD, uniqueAD),
+    sample = c(
+      rep("Major AD", length(majorAD)),
+      rep("Minor AD", length(minorAD)),
+      rep("Unique AD", length(uniqueAD))
+    )
+  )
+}, mc.preschedule = FALSE, mc.cores = detectCores()))
+
+ggplot(df, aes(AD)) +
+  geom_histogram() +
+  facet_grid(rows = vars(sample), scales = "free") +
+  labs(
+    title = "Distributions of fraction of Allele Depth (deepVariant AD)\n between samples from major, minor, or common GT", # nolint: line_length_linter.
+    x = "Read Deapth"
+  )
+
+
+tapply(df$AD, df$sample, summary)
+```
+
+### sessionInfo
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,32 @@
+---
+title: Comparative analsyis of mutation load in different CRISPR edited cell lines
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = "html_output"
+    )
+  })
+---
+
+# {.tabset .tabset-fade}
+
+```{r child="./01_group_specific_SNP_analysis_v2.Rmd"}
+```
+
+```{r child="./02_group_specific_by_edit_method.Rmd"}
+```
+
+```{r child="./03_proximal_off_target.Rmd"}
+```
+
+```{r child="./04_cas-offinder.Rmd"}
+```
+
+```{r child="./05_genotype_imbalance.Rmd"}
+```
+
+# {-}

@@ -1,0 +1,501 @@
+---
+title: Comparative analsyis of mutation load in different CRISPR edited cell lines
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_dir = "html_output"
+    )
+  })
+---
+```{r include = FALSE}
+library(httpgd)
+library(VariantAnnotation)
+library(data.table)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(org.Hs.eg.db)
+library(parallel)
+library(DT)
+library(htmltools)
+library(ggplot2)
+library(fastreeR)
+library(ape)
+library(gridExtra)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+```
+
+## SNPs proximity {.tabset .tabset-pills}
+
+### Intro
+
+#### Data.table linking samples to groups
+
+#### Rational:
+Let's create a table where the samples in the VCF are associated with a group representing a set
+of clones carrying the same CRISPR edit type.
+
+##### Strategy:
+1. Get the samples from one of the VCF header
+2. Define what samples are part of the parental group
+3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
+4. Using REGEXP, assign a unique group to each sample
+
+```{r}
+## Set a table of sample to group from one of the VCF file
+vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
+## define the parents
+parents <- "WIBR3_parental"
+## create the association table
+samplesDT <- data.table(samples = samples(scanVcfHeader(vcf.files[1])))
+
+## UPDATE 12/20/24
+## Cells to remove
+cells2Remove <- c("WIBR3_PLA2G6_D331Y_A4_C2", "WIBR3_PLA2G6_E11_5", "WIBR3_ATP13A2_FS_Homo_12_2")
+samplesDT <- samplesDT[!samples %in% cells2Remove]
+
+samplesDT[, tmp := samples]
+samplesDT[grep("SNCA", samples), tmp := sub("SNCA_", "SNCA-", samples)]
+samplesDT[grep("VPS13C", samples), tmp := sub("VPS13C_", "VPS13C-", samples)]
+samplesDT[, group := sub(".+?_(.+?)_.+", "\\1", tmp)]
+
+## UPDATE 12/20/24
+## Reasign groups
+samplesDT[samples == "WIBR3_VPS13C_FS_Homo_H3_1", group := "VPS13C-A444P"]
+samplesDT[samples == "WIBR3_VPS13C_FS_Homo_E10_2", group := "VPS13C-W395C"]
+
+samplesDT[samples %in% parents, group := "parental"]
+samplesDT[grep("EWT_S(4|5)", samples), group := "EWT-GBA1"]
+samplesDT[grep("EWT_S(1|2|3)", samples), group := "EWT-SNCA-A30P"]
+samplesDT[grep("EWT_S(6|7|8)", samples), group := "EWT-OTHERS"]
+samplesDT[grep("WIBR3_S\\d", samples), group := "S_Group"]
+samplesDT[, tmp := NULL]
+
+## Adding a meta column to group the EWT and the correspoding edit cells
+meta <- samplesDT[grep("EWT", group), sub("EWT-", "", group)]
+samplesDT[grep("EWT", group), meta := sub("EWT-", "", group)]
+samplesDT[group %in% meta, meta := group]
+
+## Print the table of samples
+datatable(samplesDT, options = list(pageLength = 25))
+```
+
+#### Loading the data
+
+```{r}
+## Only run if data files are no present
+resultToSave <- file.path("data", "unique_SNPs_vs_all.Rds")
+if (file.exists(resultToSave)) {
+  groupUniqueSnps <- readRDS(resultToSave)
+} else {
+  stop("Cant find file", resultToSave)
+}
+```
+
+
+### Inter SNPs distance
+
+#### Is there an over-represtnation of SNPs closer to each other
+
+##### Rational:
+
+Frank S. suggested that perhaps, off target effect could be reveal by new polymorphism being created near to each other just because 
+the CRISPR would tend to affect nearby location more frequenlty
+
+##### Strategy:
+
+1. Get a set of SNPs unique to a group of samples
+2. Remove the SNPs overlaping the gene target by the group edit
+3. Take a sample and
+    1. Remove the SNPs not called or same as reference
+    2. Get the location of the SNPs
+    3. Meseaure the distance between 2 SNPs next to each other in genomic location
+4. Bootrap the distriubtion by
+    1. Counting the number of SNPs per chromosome
+    2. For each chromosome, randomly selecting chromosomal loction for the same number of SNPs in sample
+    3. Computing the distance between each 2 neibhoring SNPs
+    4. Repeat 1-3 1000 times
+5. Plot the distributino of distances for the group and the bootstrap distribution
+
+```{r}
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+  ## If not dealing with EWT or control cell lines, find the current gene location and remove the SNPs from the group
+  if (!grepl("EWT|S_Group", currGroup)) {
+    gene <- unique(sub("-.+", "", grep("EWT|parental|S_Group", currGroup, value = TRUE, invert = TRUE)))
+    if (gene %in% keys(org.Hs.eg.db, "SYMBOL")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "SYMBOL")$ENTREZ
+    } else if (gene %in% keys(org.Hs.eg.db, "ALIAS")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "ALIAS")$ENTREZ
+    }
+    suppressWarnings(ol <- findOverlaps(vcf, genes[ez]))
+    if (length(queryHits(ol) > 0)) vcf <- vcf[-queryHits(ol)]
+  }
+
+  df <- do.call(rbind, lapply(samplesDT[group == currGroup, samples], function(currSample) {
+    x <- geno(vcf)$GT[, currSample]
+    f <- !x %in% c("./.", "0/0", "./0", "0/.")
+    subVcf <- vcf[f]
+
+    dist <- unlist(tapply(start(subVcf), seqnames(subVcf), function(start) start[-1] - start[-length(start)]))
+    dist <- dist[elementNROWS(dist) != 0]
+
+    chrCounts <- table(seqnames(subVcf))
+    chrCounts <- chrCounts[chrCounts != 0]
+
+    bootstrap <- unlist(lapply(seq_len(1000), function(i) {
+      unlist(lapply(names(chrCounts), function(chr) {
+        start <- sort(sample(seqlengths(subVcf)[chr], chrCounts[chr]))
+        dist <- start[-1] - start[-length(start)]
+      }))
+    }))
+    df <- data.frame(
+      distance = c(dist, bootstrap),
+      sample = c(rep("Sample", length(dist)), rep("Bootstrap", length(bootstrap)))
+    )
+  }))
+  return(df)
+}, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+names(dists) <- names(groupUniqueSnps)
+
+void <- lapply(names(dists), function(group) {
+  df <- dists[[group]]
+  p <- ggplot(df, aes(log10(distance), color = sample)) +
+    geom_histogram(binwidth = 0.05) +
+    facet_grid(rows = vars(sample), scales = "free_y") +
+    labs(
+      title = paste("Distance between SNPs for", group, "samples")
+    )
+
+  print(p)
+})
+```
+
+### KS Test
+
+#### Are the sample and bootstrap distributions comming from the same distribution?
+
+##### Rational:
+
+Kolmogorov-Smirnov test can tell us if two samples are comming from the same distribution by looking at the 
+distances between ECDFs. 
+
+```{r warning=FALSE}
+dt <- data.table(do.call(rbind, lapply(dists, function(df) {
+  setDT(df)
+  ks <- ks.test(
+    df[sample == "Sample", distance],
+    df[sample == "Bootstrap", distance],
+    alternative = "greater"
+  )
+  c("D^+" = sprintf("%.3f", ks$statistic), p.value = sprintf("%.3f", ks$p.value))
+})))
+
+datatable(cbind(group = names(dists), dt), options = list(pageLength = 25))
+```
+
+### Dist enrichment
+
+#### Is there an enrichment of SNPs closer to 100 bp?
+
+```{r}
+dt <- data.table(do.call(rbind, lapply(names(dists), function(group) {
+  dist <- setDT(dists[[group]])
+  fracSample <- dist[distance <= 100 & sample == "Sample", .N] / dist[sample == "Sample", .N]
+  fracBS <- dist[distance <= 100 & sample == "Bootstrap", .N] / dist[sample == "Bootstrap", .N]
+
+  c(
+    group = group,
+    Count = dist[distance <= 100 & sample == "Sample", .N],
+    "Sample prop" = sprintf("%.2e", fracSample),
+    "Bootstrap prop" = sprintf("%.2e", fracBS),
+    Enrichment = round(fracSample / fracBS)
+  )
+})))
+
+datatable(dt, options = list(pageLength = 25))
+```
+
+#### Is there an enrichment of SNPs closer to 1000 bp?
+
+```{r}
+dt <- data.table(do.call(rbind, lapply(names(dists), function(group) {
+  dist <- setDT(dists[[group]])
+  fracSample <- dist[distance <= 100 & sample == "Sample", .N] / dist[sample == "Sample", .N]
+  fracBS <- dist[distance <= 100 & sample == "Bootstrap", .N] / dist[sample == "Bootstrap", .N]
+
+  c(
+    group = group,
+    Count = dist[distance <= 1000 & sample == "Sample", .N],
+    "Sample prop" = sprintf("%.2e", fracSample),
+    "Bootstrap prop" = sprintf("%.2e", fracBS),
+    Enrichment = round(fracSample / fracBS)
+  )
+})))
+
+datatable(dt, options = list(pageLength = 25))
+```
+
+### SNPs within 100bp
+
+##### Rational:
+
+Let's look at the sequence around the SNPs closer to each other wihin 100 Bootrap
+
+##### Strategy:
+
+1. Take the unique SNPs of a given group of edits
+3. Remove the SNPs within the group edited gene
+2. Compute the distance between any 2 SNPs
+3. For distances less than 100bp the 2 SNPs
+4. Using the Hsapiens BSgenome, get the sequence 10nt before and 15nt after the SNPs
+5. Return a table with
+    * Distance between the 2 SNPs
+    * the REF and ALT allels for the 2 SNPs
+    * The sequences around the 2 SNPs, blue is before, red is SNPs then after
+
+
+```{r results='asis'}
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+colorize <- function(x, color) {
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)
+  } else if (knitr::is_html_output()) {
+    sprintf(
+      "<span style='color: %s; font-family: monospace, monospace;'>%s</span>", color,
+      x
+    )
+  } else {
+    x
+  }
+}
+
+results <- mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+
+  if (!grepl("EWT|S_Group", currGroup)) {
+    gene <- unique(sub("-.+", "", grep("EWT|parental", currGroup, value = TRUE, invert = TRUE)))
+    if (gene %in% keys(org.Hs.eg.db, "SYMBOL")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "SYMBOL")$ENTREZ
+    } else if (gene %in% keys(org.Hs.eg.db, "ALIAS")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "ALIAS")$ENTREZ
+    }
+    suppressWarnings(ol <- findOverlaps(vcf, genes[ez]))
+    if (length(queryHits(ol) > 0)) vcf <- vcf[-queryHits(ol)]
+  }
+
+  chrCounts <- table(seqnames(vcf))
+  chrCounts <- chrCounts[chrCounts > 0]
+
+  df <- do.call(rbind, lapply(names(chrCounts), function(chr) {
+    subVcf <- vcf[seqnames(vcf) == chr]
+    starts <- start(subVcf)
+
+    df <- do.call(rbind, lapply(which(starts[-1] - starts[-length(starts)] <= 100), function(f) {
+      seqs <- getSeq(Hsapiens, GRanges(chr, IRanges(start(subVcf[c(f, f + 1)]) - 15, width = 30)))
+
+      refs <- ref(subVcf[c(f, f + 1)])
+      alts <- sapply(alt(subVcf[c(f, f + 1)]), paste, collapse = ",")
+
+      currSamples <- samplesDT[group == currGroup, samples]
+      gt1 <- geno(subVcf[f])$GT[, samplesDT[group == currGroup, samples]]
+      gt2 <- geno(subVcf[f + 1])$GT[, samplesDT[group == currGroup, samples]]
+      gts <- c(gt1[!gt1 %in% c("./.", "0/0", "./0", "0/.")], gt2[!gt2 %in% c("./.", "0/0", "./0", "0/.")])
+
+      seqs <- paste0(
+        colorize(as.character(subseq(seqs, 1, 15)), "blue"),
+        colorize(as.character(subseq(seqs, 16, width(seqs))), "red")
+      )
+
+      data.frame(
+        distance = start(subVcf[f + 1]) - start(subVcf[f]),
+        CHR = chr,
+        start = start(subVcf[f]),
+        REF1 = refs[1],
+        ALT1 = alts[1],
+        REF2 = refs[2],
+        ALT2 = alts[2],
+        seq1 = seqs[1],
+        seq2 = seqs[2],
+        GT = paste(unique(gts), collapse = "|"),
+        sample = paste(unique(names(gts)), collapse = "\n")
+      )
+    }))
+  }))
+  return(df)
+}, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+names(results) <- names(groupUniqueSnps)
+
+for (currGroup in names(results)) {
+  cat("\n")
+  cat("#### Sequences around SNPs seperated by less than 100 bp in ", currGroup, "edited cell lines\n")
+  print(
+    tagList(
+      datatable(results[[currGroup]], escape = FALSE)
+    )
+  )
+  cat("\n")
+}
+```
+
+
+### Rel to Edit
+
+#### What is the distance of SNPs to the edited genes
+
+##### Rational:
+Perhaps, looking at the distance of SNPs relative to the edited gene might reveal a stronger signal.
+
+##### Strategy:
+
+1. Get a set of SNPs unique to a group of samples
+2. Remove the SNPs overlaping the gene target by the group edit
+4. Get the location of the gene CRISPR edited in a group
+5. Keep only SNPs on the same chromosome as the edited gene
+6. Compute the distance between SNPs and start or end of gene (relative to where they are located to the gene)
+7. Bootstrap the distribution by:
+    1. Seleting random position on the chromosme around the edited gene
+    4. Repeat 1000 times
+5. Plot the distributino of distances for the group and the bootstrap distribution
+
+```{r}
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
+  if (grepl("OTHERS|S_Group", currGroup)) {
+    return(data.frame())
+  }
+  vcf <- groupUniqueSnps[[currGroup]]
+
+  ## If not dealing with EWT, find the current gene location and remove the SNPs from the group
+  currGroup2 <- sub("(EWT-|^)(.+)", "\\2", currGroup)
+  gene <- sub("(.+)-.+", "\\1", currGroup2)
+
+  if (gene %in% keys(org.Hs.eg.db, "SYMBOL")) {
+    ez <- select(org.Hs.eg.db, gene, "ENTREZID", "SYMBOL")$ENTREZ
+  } else if (gene %in% keys(org.Hs.eg.db, "ALIAS")) {
+    ez <- select(org.Hs.eg.db, gene, "ENTREZID", "ALIAS")$ENTREZ
+  }
+  suppressWarnings(ol <- findOverlaps(vcf, genes[ez]))
+  if (length(queryHits(ol) > 0)) vcf <- vcf[-queryHits(ol)]
+
+  currChr <- as.character(seqnames(genes[ez]))
+  subVCF <- vcf[seqnames(vcf) == currChr]
+  if (length(subVCF) < 2) {
+    return(data.frame())
+  }
+  starts <- start(subVCF)
+  f1 <- starts < start(genes[ez])
+  dist <- c(start(genes[ez]) - starts[f1], starts[!f1] - end(genes[ez]))
+
+  ## bootstrap
+  target <- c(1:start(genes[ez]), end(genes[ez]):seqlengths(vcf)[currChr])
+  bootstrap <- unlist(lapply(seq_len(1000), function(i) {
+    starts <- sort(sample(seqlengths(vcf)[currChr], length(subVCF)))
+    f1 <- starts < start(genes[ez])
+    dist <- c(start(genes[ez]) - starts[f1], starts[!f1] - end(genes[ez]))
+  }))
+
+  df <- data.frame(
+    distance = c(dist, bootstrap),
+    sample = c(rep("Sample", length(dist)), rep("Bootstrap", length(bootstrap)))
+  )
+}, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+names(dists) <- names(groupUniqueSnps)
+
+void <- lapply(names(dists), function(group) {
+  df <- dists[[group]]
+  if (nrow(df) == 0) {
+    cat(group, "have less than 2 SNPs near the edited gene\n")
+  } else {
+    p <- ggplot(df, aes(log10(distance), color = sample)) +
+      geom_histogram(binwidth = 0.05) +
+      facet_grid(rows = vars(sample), scales = "free_y") +
+      labs(
+        title = paste("Distance between SNPs for", group, "samples")
+      )
+    print(p)
+  }
+})
+```
+
+### Dist per group
+
+#### Distance between SNPs within a group
+
+##### Rational:
+
+Ok, keeping this here as initialy I look at the distance of SNPs within a group of samples instead of wihin a 
+single sample. The impact is that you might get SNPs that are close to each others accross samples, which if the 
+assumption is that they are caused by initial edits of a chromatid then subsquent CRISPR edits in the neibhoring DNA, 
+wihin group does not make sense ***
+
+```{r}
+txbygene <- transcriptsBy(txdb, "gene")
+genes <- unlist(range(txbygene))
+
+dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
+  vcf <- groupUniqueSnps[[currGroup]]
+
+  ## If not dealing with EWT, find the current gene location and remove the SNPs from the group
+  if (!grepl("EWT|S_Group", currGroup)) {
+    gene <- unique(sub("-.+", "", grep("EWT|parental", currGroup, value = TRUE, invert = TRUE)))
+    if (gene %in% keys(org.Hs.eg.db, "SYMBOL")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "SYMBOL")$ENTREZ
+    } else if (gene %in% keys(org.Hs.eg.db, "ALIAS")) {
+      ez <- select(org.Hs.eg.db, gene, "ENTREZID", "ALIAS")$ENTREZ
+    }
+    suppressWarnings(ol <- findOverlaps(vcf, genes[ez]))
+    if (length(queryHits(ol) > 0)) vcf <- vcf[-queryHits(ol)]
+  }
+
+  dist <- unlist(tapply(start(vcf), seqnames(vcf), function(start) start[-1] - start[-length(start)]))
+  dist <- dist[elementNROWS(dist) != 0]
+
+  chrCounts <- table(seqnames(vcf))
+  chrCounts <- chrCounts[chrCounts != 0]
+
+  bootstrap <- unlist(lapply(seq_len(1000), function(i) {
+    unlist(lapply(names(chrCounts), function(chr) {
+      start <- sort(sample(seqlengths(vcf)[chr], chrCounts[chr]))
+      dist <- start[-1] - start[-length(start)]
+    }))
+  }))
+
+  df <- data.frame(
+    distance = c(dist, bootstrap),
+    sample = c(rep("Sample", length(dist)), rep("Bootstrap", length(bootstrap)))
+  )
+}, mc.cores = detectCores(), mc.preschedule = FALSE)
+
+names(dists) <- names(groupUniqueSnps)
+
+void <- lapply(names(dists), function(group) {
+  df <- dists[[group]]
+  p <- ggplot(df, aes(log10(distance), color = sample)) +
+    geom_histogram(binwidth = 0.05) +
+    facet_grid(rows = vars(sample), scales = "free_y") +
+    labs(
+      title = paste("Distance between SNPs for", group, "samples")
+    )
+
+  print(p)
+})
+```
+
+### sessionInfo
+```{r}
+sessionInfo()
+```
