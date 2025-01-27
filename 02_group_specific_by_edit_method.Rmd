@@ -338,7 +338,7 @@ something consumable
 
 #### Phylogenetic tree from only the SNPs unique to the edited cell lines
 
-```{r fig.height=10, fig.width=10, echo=FALSE, warning=FALSE}
+```{r fig.height=10, fig.width=10, warning=FALSE}
 myVcfDist <- fastreeR::vcf2dist(inputFile = vcfToSave, threads = 2)
 myVcfTree <- fastreeR::dist2tree(inputDist = myVcfDist)
 
