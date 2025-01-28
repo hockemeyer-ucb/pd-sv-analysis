@@ -52,14 +52,9 @@ of clones carrying the same CRISPR edit type.
 vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
 ## define the parents
 parents <- "WIBR3_parental"
+
 ## create the association table
 samplesDT <- data.table(samples = samples(scanVcfHeader(vcf.files[1])))
-
-# ## UPDATE 12/20/24
-# ## Cells to remove
-# cells2Remove <- c("WIBR3_PLA2G6_D331Y_A4_C2", "WIBR3_PLA2G6_E11_5", "WIBR3_ATP13A2_FS_Homo_12_2")
-# samplesDT <- samplesDT[!samples %in% cells2Remove]
-
 samplesDT[, tmp := samples]
 samplesDT[grep("SNCA", samples), tmp := sub("SNCA_", "SNCA-", samples)]
 samplesDT[grep("VPS13C", samples), tmp := sub("VPS13C_", "VPS13C-", samples)]
