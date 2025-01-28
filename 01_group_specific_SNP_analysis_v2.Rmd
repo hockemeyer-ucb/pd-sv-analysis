@@ -741,7 +741,10 @@ results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
 names(results2) <- names(groupUniqueSnps)
 
 write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "CDS_impact_grouping_keys.csv"))
-write.csv(do.call(rbind, lapply(rawResult, "[[", "dt")), file.path("data", "CDS_impact.csv"))
+results3 <- cbind(do.call(rbind, results2),
+  group = rep(names(results2), sapply(results2, nrow))
+)
+write.csv(results3, file.path("data", "CDS_impact.csv"))
 
 for (currGroup in names(results2)) {
   cat("\n")
