@@ -28,6 +28,7 @@ library(fastreeR)
 library(ape)
 library(gridExtra)
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+txdb <- keepStandardChromosomes(txdb)
 hgd()
 ```
 
@@ -507,7 +508,7 @@ something consumable
 
 #### Phylogenetic tree from only the SNPs unique to the edited cell lines
 
-```{r fig.height=10, fig.width=10, warning=FALSE}
+```{r fig.height=10, fig.width=10, warning=FALSE, eval = FALSE}
 myVcfDist <- fastreeR::vcf2dist(inputFile = vcfToSave, threads = 2)
 myVcfTree <- fastreeR::dist2tree(inputDist = myVcfDist)
 
@@ -530,16 +531,108 @@ What type of genomic features are affected by the SNPS in each group
 4. Get all the features overlaping a SNPs
 
 ```{r}
-annotFile <- file.path("data", "all_snps_annotation.Rds")
-if (file.exists(annotFile)) {
-  allGroup <- readRDS(annotFile)
-} else {
-  allGroup <- mclapply(groupUniqueSnps, function(vcf) {
-    seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
-    all <- locateVariants(vcf, txdb, AllVariants())
-  }, mc.cores = detectCores(), mc.preschedule = FALSE)
-  saveRDS(allGroup, annotFile)
-}
+vcf <- groupUniqueSnps[[1]]
+allGroup <- mclapply(groupUniqueSnps, function(vcf) {
+  seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
+  all <- locateVariants(vcf, txdb, AllVariants())
+
+  ## UPDATE 02/28/25
+  ## There's a bug with locateVariants(), intronic variants are wrong. Let's recode them
+  all <- all[all$LOCATION != "intron"]
+
+  ## Copying from the the VariantAnnotation repo, from the variantLocation() method
+  .location <-
+    function(length = 0, value = NA) {
+      levels <- c(
+        "spliceSite", "intron", "fiveUTR", "threeUTR",
+        "coding", "intergenic", "promoter"
+      )
+      factor(rep(value, length), levels = levels)
+    }
+
+  subject <- intronsByTranscript(txdb)
+  ## Remove items with no GRanges, that's the bug
+  subject <- introns[elementNROWS(introns) > 0]
+  query <- rowRanges(vcf)
+  vtype <- "intron"
+  ignore.strand <- FALSE
+  asHits <- FALSE
+
+  map <- mapToTranscripts(unname(query), subject,
+    ignore.strand = ignore.strand
+  )
+  if (length(map) > 0) {
+    xHits <- map$xHits
+    txHits <- map$transcriptsHits
+    tx <- names(subject)[txHits]
+    if (!is.null(tx)) {
+      txid <- tx
+    } else {
+      txid <- NA_integer_
+    }
+    ## FIXME: cdsid is expensive
+    cdsid <- IntegerList(integer(0))
+    ## CodingVariants() must fall within a coding region.
+    ## mapToTranscripts() will map ranges that span intron
+    ## junctions and overlap multiple exons/cds regions. Because
+    ## of this, it's possible for 'map' to return a hit for a
+    ## query that 'map2' will not. (The subject in
+    ## 'map' is a GRangesList and in 'map2' it's unlisted.)
+    ## Only ranges identified by 'map' and 'map2' are kept.
+    ## Ranges identified by 'map' only are discarded.
+    if (vtype == "coding") {
+      usub <- unlist(subject) ## names needed for mapping
+      map2 <- mapToTranscripts(unname(query)[xHits], usub,
+        ignore.strand = ignore.strand
+      )
+      cds <- mcols(usub)$cds_id[map2$transcriptsHits]
+      if (length(cds)) {
+        cdsid <- unique(splitAsList(cds, map2$xHits))
+        keep <- logical(length(xHits))
+        keep[unique(map2$xHits)] <- TRUE
+        if (any(!keep)) {
+          map <- map[keep]
+          txHits <- map$transcriptsHits
+          xHits <- map$xHits
+          txid <- txid[keep]
+        }
+      }
+    }
+
+    ss <- runValue(strand(subject)[txHits])
+    if (any(elementNROWS(ss) > 1L)) {
+      warning(
+        "'subject' has multiple strands per list element; ",
+        "setting strand to '*'"
+      )
+      sstrand <- Rle("*", length(txHits))
+    }
+    sstrand <- unlist(ss, use.names = FALSE)
+    res <- GRanges(
+      seqnames = seqnames(query)[xHits],
+      ranges = IRanges(ranges(query)[xHits]),
+      strand = sstrand,
+      LOCATION = .location(length(xHits), vtype),
+      LOCSTART = start(map),
+      LOCEND = end(map),
+      QUERYID = xHits,
+      TXID = txid,
+      CDSID = cdsid,
+      GENEID = NA_character_,
+      PRECEDEID = CharacterList(character(0)),
+      FOLLOWID = CharacterList(character(0))
+    )
+  }
+  res$GENEID <- select(
+    txdb, as.character(res$TXID),
+    "GENEID", "TXID"
+  )$GENEID
+
+  all <- c(all, res)
+
+  ## Reorder the GRanges based on the names of the original VCF
+  all[factor(names(all), levels = names(vcf))]
+}, mc.cores = detectCores(), mc.preschedule = FALSE)
 ```
 
 #### Tabulate the count of features per group
@@ -628,7 +721,7 @@ datatable(do.call(rbind, lapply(rawResult, "[[", "legend")))
 #### List the genes affected by the SNPs in each type of feature (excluding introns and promoter)
 ```{r results ='asis'}
 write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "SNP_annotations_grouping_keys.csv"))
-write.csv(do.call(rbind, lapply(rawResult, "[[", "dt")), file.path("data", "SNP_annotations.csv"))
+write.csv(do.call(rbind, lapply(rawResult, "[[", "dt")), file.path("data", "SNP_annotations_update2.csv"))
 
 for (currGroup in names(rawResult)) {
   cat("\n")
