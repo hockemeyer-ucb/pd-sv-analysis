@@ -67,8 +67,8 @@ samplesDT[samples == "WIBR3_VPS13C_FS_Homo_H3_1", group := "VPS13C-A444P"]
 samplesDT[samples == "WIBR3_VPS13C_FS_Homo_E10_2", group := "VPS13C-W395C"]
 
 samplesDT[samples %in% parents, group := "parental"]
-samplesDT[grep("EWT_S(4|5)", samples), group := "EWT-GBA1"]
-samplesDT[grep("EWT_S(1|2|3)", samples), group := "EWT-SNCA-A30P"]
+samplesDT[grep("EWT_S(4|5)", samples), group := "GBA1"]
+samplesDT[grep("EWT_S(1|2|3)", samples), group := "SNCA-A30P"]
 samplesDT[grep("EWT_S(6|7|8)", samples), group := "EWT-OTHERS"]
 samplesDT[grep("WIBR3_S\\d", samples), group := "S_Group"]
 samplesDT[, tmp := NULL]
@@ -98,6 +98,8 @@ datatable(samplesDT)
 9. Returns the SNPs in the Group not present in the Universe
 
 ```{r}
+vcf.file <- grep("chr1\\.", vcf.files, value = TRUE)
+
 getSubsetFilter <- function(vcf, samples, qual) {
   subset <- as.data.frame(geno(vcf)$GT[, samples])
   filter <- !apply(subset, 1, function(x) all(x %in% c("./.", "0/0", "./0", "0/."))) & qual(vcf) >= qual
@@ -110,10 +112,18 @@ getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
 
   groups <- samplesDT[group != "parental", unique(group), ] # nolint: object_usage_linter.
   ## Roll through the groups and get their unique SNPs
+
+  currGroup <- "EWT-SNCA-A30P"
+
+
+
   results <- lapply(groups, function(currGroup) {
     ## Get the sample names of the group under analysis
     currSamples <- samplesDT[currGroup == group, samples] # nolint: object_usage_linter.
     currUniverse <- samplesDT[-grep(paste0("(", currGroup, "|EWT)"), group), samples] # nolint: object_usage_linter.
+
+    currUniverse
+
     ## Remove the meta samples for the EWTs...
     if (!is.na(unique(samplesDT[group == currGroup, meta]))) { # nolint: object_usage_linter.
       metaSamples <- samplesDT[meta %in% samplesDT[group == currGroup, meta], samples] # nolint: object_usage_linter.
@@ -125,8 +135,7 @@ getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
 
     ## Subset the vcf to the group SNPS
     uniqueSnps <- vcf[groupSnp_f & !universeSnps_f]
-
-    return(uniqueSnps)
+    uniqueSnps
   })
 
   names(results) <- groups
@@ -164,6 +173,15 @@ if (file.exists(resultToSave) && file.exists(vcfToSave)) {
     mc.preschedule = FALSE
   )
 
+  rawResults[[grep("chr1\\.", vcf.files)]]
+
+  "chr1_228761069_T_C" %in% rownames(rawResults[[grep("chr1\\.", vcf.files)]][["ATP13A2"]])
+  "chr1_228761069_T_C" %in% rownames(rawResults[[grep("chr1\\.", vcf.files)]][["EWT-SNCA-A30P"]])
+
+  rawResults
+
+
+
   groupUniqueSnps <- mclapply(names(rawResults[[1]]), function(group) {
     res <- do.call(rbind, lapply(rawResults, "[[", group))
     return(res)
@@ -176,6 +194,10 @@ if (file.exists(resultToSave) && file.exists(vcfToSave)) {
   allUniqueVCF <- unique(do.call(rbind, groupUniqueSnps))
   writeVcf(allUniqueVCF, vcfToSave)
 }
+
+
+"chr1_228761069_T_C" %in% rownames(groupUniqueSnps[["ATP13A2"]])
+"chr1_228761069_T_C" %in% rownames(groupUniqueSnps[["EWT-SNCA-A30P"]])
 ```
 
 ### All Intersections
@@ -200,8 +222,6 @@ geno <- melt(
 geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
 samples <- geno[, unique(sample)]
 
-dt
-
 codes <- do.call(c, lapply(seq_len(floor(length(samples) / 26) + 1), function(i) {
   if (26 * i < length(samples)) {
     end <- 26
@@ -214,6 +234,8 @@ codes <- do.call(c, lapply(seq_len(floor(length(samples) / 26) + 1), function(i)
 void <- lapply(seq_along(codes), function(i) {
   geno[sample == samples[i], sub := codes[i]]
 })
+
+geno
 
 combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
 combn <- unique(combi)
@@ -234,6 +256,20 @@ print(tagList(datatable(legend)))
 cat("##### Number of SNPs per combination for all edited cell lines\n")
 print(tagList(datatable(dt1, options = list(order = list(list(2, "desc"))))))
 cat("\n")
+
+
+vcf
+
+sum(duplicated(row.names(vcf)))
+
+
+
+f <- !geno(vcf["chr1_228761069_T_C"])$GT %in% c("0/0", "./.", "./0", "0/.")
+
+geno(vcf["chr1_228761069_T_C"])$GT[f]
+
+
+colnames(vcf)[f]
 ```
 
 ### Phylo Tree

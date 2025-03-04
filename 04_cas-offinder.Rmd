@@ -21,6 +21,8 @@ library(ggplot2)
 library(httpgd)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library(org.Hs.eg.db)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+txdb <- keepStandardChromosomes(txdb)
 ```
 
 
@@ -193,10 +195,7 @@ datatable(head(casOff, 50)) %>%
 #### Is cas-offinder hits the targeted gene?
 
 ```{r warning=FALSE, message=FALSE}
-txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
-
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
 
@@ -294,9 +293,7 @@ dt.m1 <- melt(samplesDT,
 )
 dt.m1[, guideId := sub(" ", "_", guideId)]
 
-txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
 symbol2ez <- select(org.Hs.eg.db, targetGenes, "ENTREZID", "SYMBOL")
@@ -437,9 +434,7 @@ dt.m1 <- melt(samplesDT,
 )
 dt.m1[, guideId := sub(" ", "_", guideId)]
 
-txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 targetGenes <- unique(sub("-.+", "", grep("EWT|parental", names(groupUniqueSnps), value = TRUE, invert = TRUE)))
 symbol2ez <- select(org.Hs.eg.db, targetGenes, "ENTREZID", "SYMBOL")

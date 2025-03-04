@@ -26,6 +26,7 @@ library(fastreeR)
 library(ape)
 library(gridExtra)
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+txdb <- keepStandardChromosomes(txdb)
 ```
 
 ## SNPs proximity {.tabset .tabset-pills}
@@ -121,8 +122,7 @@ the CRISPR would tend to affect nearby location more frequenlty
 5. Plot the distributino of distances for the group and the bootstrap distribution
 
 ```{r}
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
   vcf <- groupUniqueSnps[[currGroup]]
@@ -160,7 +160,7 @@ dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
       sample = c(rep("Sample", length(dist)), rep("Bootstrap", length(bootstrap)))
     )
   }))
-  return(df)
+  df
 }, mc.cores = detectCores(), mc.preschedule = FALSE)
 
 names(dists) <- names(groupUniqueSnps)
@@ -263,8 +263,7 @@ Let's look at the sequence around the SNPs closer to each other wihin 100 Bootra
 
 
 ```{r results='asis'}
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 colorize <- function(x, color) {
   if (knitr::is_latex_output()) {
@@ -369,8 +368,7 @@ Perhaps, looking at the distance of SNPs relative to the edited gene might revea
 5. Plot the distributino of distances for the group and the bootstrap distribution
 
 ```{r}
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes(txdb)
 
 dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
   if (grepl("OTHERS|S_Group", currGroup)) {
@@ -443,8 +441,7 @@ assumption is that they are caused by initial edits of a chromatid then subsquen
 wihin group does not make sense ***
 
 ```{r}
-txbygene <- transcriptsBy(txdb, "gene")
-genes <- unlist(range(txbygene))
+genes <- genes
 
 dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
   vcf <- groupUniqueSnps[[currGroup]]
