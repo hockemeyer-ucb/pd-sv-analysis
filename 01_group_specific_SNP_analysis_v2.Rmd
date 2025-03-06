@@ -113,7 +113,7 @@ getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
   results <- lapply(groups, function(currGroup) {
     ## Get the sample names of the group under analysis
     currSamples <- samplesDT[currGroup == group, samples] # nolint: object_usage_linter.
-    currUniverse <- samplesDT[-grep(paste0("(", currGroup, "|EWT)"), group), samples] # nolint: object_usage_linter.
+    currUniverse <- samplesDT[currGroup != group, samples] # nolint: object_usage_linter.
     ## Remove the meta samples for the EWTs...
     if (!is.na(unique(samplesDT[group == currGroup, meta]))) { # nolint: object_usage_linter.
       metaSamples <- samplesDT[meta %in% samplesDT[group == currGroup, meta], samples] # nolint: object_usage_linter.
@@ -254,7 +254,7 @@ something consumable
 
 #### Phylogenetic tree from only the SNPs unique to the edited cell lines
 
-```{r fig.height=10, fig.width=10, warning=FALSE, eval = FALSE}
+```{r fig.height=10, fig.width=10, warning=FALSE}
 myVcfDist <- fastreeR::vcf2dist(inputFile = vcfToSave, threads = 2)
 myVcfTree <- fastreeR::dist2tree(inputDist = myVcfDist)
 
@@ -280,12 +280,19 @@ What type of genomic features are affected by the SNPS in each group
 allGroup <- mclapply(groupUniqueSnps, function(vcf) {
   seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
   all <- locateVariants(vcf, txdb, AllVariants())
-
   ## UPDATE 02/28/25
   ## There's a bug with locateVariants(), intronic variants are wrong. Let's recode them
-  all <- all[all$LOCATION != "intron"]
+  all.noInt <- all[all$LOCATION != "intron"]
 
   ## Copying from the the VariantAnnotation repo, from the variantLocation() method
+  subject <- intronsByTranscript(txdb)
+  ## Remove items with no GRanges, that's the bug
+  subject <- subject[elementNROWS(subject) > 0]
+  query <- rowRanges(vcf)
+  vtype <- "intron"
+  ignore.strand <- FALSE
+  asHits <- FALSE
+
   .location <-
     function(length = 0, value = NA) {
       levels <- c(
@@ -294,14 +301,6 @@ allGroup <- mclapply(groupUniqueSnps, function(vcf) {
       )
       factor(rep(value, length), levels = levels)
     }
-
-  subject <- intronsByTranscript(txdb)
-  ## Remove items with no GRanges, that's the bug
-  subject <- subject[elementNROWS(subject) > 0]
-  query <- rowRanges(vcf)
-  vtype <- "intron"
-  ignore.strand <- FALSE
-  asHits <- FALSE
 
   map <- mapToTranscripts(unname(query), subject,
     ignore.strand = ignore.strand
@@ -317,7 +316,6 @@ allGroup <- mclapply(groupUniqueSnps, function(vcf) {
     }
     ## FIXME: cdsid is expensive
     cdsid <- IntegerList(integer(0))
-
 
     ss <- runValue(strand(subject)[txHits])
     if (any(elementNROWS(ss) > 1L)) {
@@ -348,10 +346,9 @@ allGroup <- mclapply(groupUniqueSnps, function(vcf) {
     "GENEID", "TXID"
   )$GENEID
 
-  all <- c(all, res)
-
-  ## Reorder the GRanges based on the names of the original VCF
-  all[factor(names(all), levels = names(vcf))]
+  ## Add back the intronic location and reorder the GRanges based on the location
+  all <- c(all.noInt, res)
+  all <- all[order(all)]
 }, mc.cores = detectCores(), mc.preschedule = FALSE)
 ```
 
@@ -379,7 +376,6 @@ rawResult <- lapply(names(allGroup), function(currGroup) {
     allele = rownames(geno(vcf)$GT),
     data.table(geno(vcf)$GT)[, ..currSamples]
   )
-
   geno <- melt(
     dt,
     id.vars = "allele",
@@ -404,7 +400,6 @@ rawResult <- lapply(names(allGroup), function(currGroup) {
   combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
 
   all <- allGroup[[currGroup]]
-
   dt <- do.call(rbind, lapply(levels(all$LOCATION), function(feature) {
     f <- all$LOCATION == feature
 
@@ -417,19 +412,20 @@ rawResult <- lapply(names(allGroup), function(currGroup) {
     snpID <- snpID[f2]
     snpLocation <- snpLocation[f2] ## UPDATE 12/20/24
 
+
     dt <- data.table(select(org.Hs.eg.db, gid, c("SYMBOL", "GENENAME", "GENETYPE"), "ENTREZID"))
     dt$group <- currGroup
     dt$feature <- feature
     dt$location <- snpLocation
     dt$combi <- combi[snpID]
-    return(unique(dt[, ENTREZID := NULL]))
+    unique(dt[, ENTREZID := NULL])
   }))
   legend <- data.table(
     group = currGroup,
     sample = samples,
     code = codes
   )
-  return(list(legend = legend, dt = dt))
+  list(legend = legend, dt = dt)
 })
 names(rawResult) <- names(allGroup)
 
