@@ -364,6 +364,19 @@ featuresPerGroup <- do.call(rbind, lapply(names(allGroup), function(group) {
 }))
 
 datatable(dcast(featuresPerGroup, group ~ feature, value.var = "count"))
+
+vcf <- groupUniqueSnps[["VPS13C-A444P"]]
+snp <- GRanges('chr15',IRanges(62000563))
+
+
+
+snp %within% rowRanges(vcf)
+
+o.l <- findOverlaps(snp,rowRanges(vcf))
+
+
+rowRanges(vcf[subjectHits(o.l)])
+
 ```
 
 #### Samples to code legend for the different edited cell line groups
@@ -477,7 +490,6 @@ datatable(as.data.frame(tt))
 ```{r message=FALSE, results='asis'}
 results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
   ## Get the combination of samples for each SNPs
-
   currSamples <- samplesDT[group == currGroup, samples]
   vcf <- groupUniqueSnps[[currGroup]][, currSamples]
 
@@ -509,16 +521,15 @@ results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
   combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
 
   seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
-  cds <- unique(locateVariants(vcf, txdb, CodingVariants()))
-
-  aa <- unique(predictCoding(vcf[cds$QUERYID], txdb, Hsapiens))
-  aa <- aa[!is.na(aa$GENEID)]
+  cds <- locateVariants(vcf, txdb, CodingVariants())
+  aa <- predictCoding(vcf[cds$QUERYID], txdb, Hsapiens)
+  aa$GENEID <- select(txdb, aa$TXID, "GENEID", "TXID")$GENEID
+  aa <- aa[!(duplicated(aa) & (duplicated(aa$GENEID) | is.na(aa$GENEID)))]
 
   if (length(aa) > 0) {
     gt <- apply(data.table(geno(vcf[names(aa)])$GT)[, ..currSamples], 1, function(x) {
       paste(unique(x[!x %in% c("0/0", "./.", "./0", "0/.")]), collapse = ",")
     })
-
 
     dt <- data.table(
       REF = as.character(aa$REF),
@@ -548,9 +559,11 @@ results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
 names(results2) <- names(groupUniqueSnps)
 
 write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "CDS_impact_grouping_keys.csv"))
+
 results3 <- cbind(do.call(rbind, results2),
   group = rep(names(results2), sapply(results2, nrow))
 )
+
 write.csv(results3, file.path("data", "CDS_impact.csv"))
 
 for (currGroup in names(results2)) {
@@ -564,8 +577,26 @@ for (currGroup in names(results2)) {
   cat("\n")
 }
 ```
+#### Sanity check to verify that all the genes in the SNP table are in the  CDS impact table
+
+```{r}
+sampleNames <- unique(c(names(rawResult), names(results2)))
+
+## Make sure both list have same samples
+all(sampleNames %in% names(rawResult)) & all(sampleNames %in% names(results2))
+
+## Make sures all snp located in coding feature from first table
+## Are the list of coding impact in second table
+all(sapply(sampleNames, function(currGroup) {
+  res1 <- rawResult[[currGroup]][["dt"]]
+  genes1 <- res1[res1$feature == "coding"]$SYMBOL
+  genes2 <- results2[[currGroup]]$SYMBOL
+  all(unique(c(genes1, genes2)) %in% genes1) & all(unique(c(genes1, genes2)) %in% genes2)
+}))
+```
 
 ### sessionInfo
 ```{r}
 sessionInfo()
 ```
+

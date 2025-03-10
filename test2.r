@@ -20,6 +20,7 @@ get_random_location_within_sub_subject <- function(subject, nItems = 25, seed = 
     GRanges(chr, IRanges(loc))
   }))
   return(randomLocations)
+
 }
 
 

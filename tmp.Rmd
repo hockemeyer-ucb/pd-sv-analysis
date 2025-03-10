@@ -1,9 +1,8 @@
 ---
-title: Comparative analsyis of mutation load in different CRISPR edited cell lines
+title: Identification of latest bug in predictCoding() function
 output:
   html_document:
     df_print: paged
-    code_folding: hide
 knit: (function(input, ...) {
     rmarkdown::render(
       input,
@@ -11,601 +10,101 @@ knit: (function(input, ...) {
     )
   })
 ---
-```{r include = FALSE}
-options(java.parameters = "-Xmx90G")
-library(httpgd)
+
+## Loading needed packages
+
+```{r message = FALSE}
 library(VariantAnnotation)
-library(httpgd)
-library(data.table)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library(BSgenome.Hsapiens.UCSC.hg38)
-library(org.Hs.eg.db)
-library(parallel)
 library(DT)
-library(htmltools)
-library(ggplot2)
-library(fastreeR)
-library(ape)
-library(gridExtra)
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
 txdb <- keepStandardChromosomes(txdb)
-hgd()
 ```
 
-##  Groupwise SNPs {.tabset .tabset-fade .tabset-pills}
 
-### Intro
+## Loading the VCF files, subsetting to ATP13A2
 
-#### Data.table linking samples to groups
-
-##### Rational:
-Let's create a table where the samples in the VCF are associated with a group representing a set
-of clones carrying the same CRISPR edit type.
-
-##### Strategy:
-1. Get the samples from one of the VCF header
-2. Define what samples are part of the parental group
-3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
-4. Using REGEXP, assign a unique group to each sample
-
-```{r}
-## Set a table of sample to group from one of the VCF file
-vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
-## define the parents
-parents <- "WIBR3_parental"
-
-## create the association table
-samplesDT <- data.table(samples = samples(scanVcfHeader(vcf.files[1])))
-samplesDT[, tmp := samples]
-samplesDT[grep("SNCA", samples), tmp := sub("SNCA_", "SNCA-", samples)]
-samplesDT[grep("VPS13C", samples), tmp := sub("VPS13C_", "VPS13C-", samples)]
-samplesDT[, group := sub(".+?_(.+?)_.+", "\\1", tmp)]
-
-## UPDATE 12/20/24
-## Reasign groups
-samplesDT[samples == "WIBR3_VPS13C_FS_Homo_H3_1", group := "VPS13C-A444P"]
-samplesDT[samples == "WIBR3_VPS13C_FS_Homo_E10_2", group := "VPS13C-W395C"]
-
-samplesDT[samples %in% parents, group := "parental"]
-samplesDT[grep("EWT_S(4|5)", samples), group := "GBA1"]
-samplesDT[grep("EWT_S(1|2|3)", samples), group := "SNCA-A30P"]
-samplesDT[grep("EWT_S(6|7|8)", samples), group := "EWT-OTHERS"]
-samplesDT[grep("WIBR3_S\\d", samples), group := "S_Group"]
-samplesDT[, tmp := NULL]
-
-## Adding a meta column to group the EWT and the correspoding edit cells
-meta <- samplesDT[grep("EWT", group), sub("EWT-", "", group)]
-samplesDT[grep("EWT", group), meta := sub("EWT-", "", group)]
-samplesDT[group %in% meta, meta := group]
-
-## Print the table of samples
-datatable(samplesDT)
-```
-
-### Unique Snps
-
-#### Find SNPs common to a set of samples
-
-##### Strategy:
-1. Read the VCF for a given chromosome
-2. Remove the SNPs with a Qual less than 30
-3. Subset the SNPs for the samples of a given group
-4. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
-5. Define the sample part of the univers. ie all samples excluding EWTs
-6. If a sample is part of the meta colums, remove the samples of the meta from the universeSnps
-7. Subset the SNPs for the samples of a given group
-8. Remove the SNPs where all the calls are missing or REF (GT %in% ./., 0/0, 0/., ./0)
-9. Returns the SNPs in the Group not present in the Universe
-
-```{r}
-vcf.file <- grep("chr1\\.", vcf.files, value = TRUE)
-
-getSubsetFilter <- function(vcf, samples, qual) {
-  subset <- as.data.frame(geno(vcf)$GT[, samples])
-  filter <- !apply(subset, 1, function(x) all(x %in% c("./.", "0/0", "./0", "0/."))) & qual(vcf) >= qual
-  return(filter)
-}
-
-getUniqueSnps <- function(vcf.file, samplesDT, qual = 40) {
-  ## Read the VCF
-  vcf <- readVcf(vcf.file)
-
-  groups <- samplesDT[group != "parental", unique(group), ] # nolint: object_usage_linter.
-  ## Roll through the groups and get their unique SNPs
-
-  currGroup <- "EWT-SNCA-A30P"
-
-
-
-  results <- lapply(groups, function(currGroup) {
-    ## Get the sample names of the group under analysis
-    currSamples <- samplesDT[currGroup == group, samples] # nolint: object_usage_linter.
-    currUniverse <- samplesDT[-grep(paste0("(", currGroup, "|EWT)"), group), samples] # nolint: object_usage_linter.
-
-    currUniverse
-
-    ## Remove the meta samples for the EWTs...
-    if (!is.na(unique(samplesDT[group == currGroup, meta]))) { # nolint: object_usage_linter.
-      metaSamples <- samplesDT[meta %in% samplesDT[group == currGroup, meta], samples] # nolint: object_usage_linter.
-      currUniverse <- currUniverse[!currUniverse %in% metaSamples]
-    }
-
-    groupSnp_f <- getSubsetFilter(vcf, currSamples, qual)
-    universeSnps_f <- getSubsetFilter(vcf, currUniverse, qual)
-
-    ## Subset the vcf to the group SNPS
-    uniqueSnps <- vcf[groupSnp_f & !universeSnps_f]
-    uniqueSnps
-  })
-
-  names(results) <- groups
-  return(results)
-}
-```
-
-#### Computing the unique SNPs for each group
-
-##### Rational:
-Now that we have the underlying algorithm, it's time to roll over every VCF file for each choromsome
-(For a gain of speed, we'll do that using parallel computing) and we will massage the data to return 
-something consumable
-
-##### Strategy:
-1. Define the parental samples
-2. Find the VCF files
-4. Reading the header of one VCF file, get the group tags
-5. In parallel, computed the unique SNPs VCF and stats
-6. Massage the data for compsution (and save the VCF to HD)
-
-```{r}
-## Only run if data files are no present
-resultToSave <- file.path("data", "unique_SNPs_vs_all.Rds")
-vcfToSave <- file.path("data", "unique_SNPs_vs_all.vcf")
-if (file.exists(resultToSave) && file.exists(vcfToSave)) {
-  groupUniqueSnps <- readRDS(resultToSave)
-  allUniqueVCF <- readVcf(vcfToSave)
-} else {
-  rawResults <- mclapply(vcf.files,
-    getUniqueSnps,
-    samplesDT = samplesDT,
-    qual = 30,
-    mc.cores = detectCores(),
-    mc.preschedule = FALSE
-  )
-
-  rawResults[[grep("chr1\\.", vcf.files)]]
-
-  "chr1_228761069_T_C" %in% rownames(rawResults[[grep("chr1\\.", vcf.files)]][["ATP13A2"]])
-  "chr1_228761069_T_C" %in% rownames(rawResults[[grep("chr1\\.", vcf.files)]][["EWT-SNCA-A30P"]])
-
-  rawResults
-
-
-
-  groupUniqueSnps <- mclapply(names(rawResults[[1]]), function(group) {
-    res <- do.call(rbind, lapply(rawResults, "[[", group))
-    return(res)
-  }, mc.cores = detectCores(), mc.preschedule = FALSE)
-
-  names(groupUniqueSnps) <- names(rawResults[[1]])
-  dir.create("data", showWarnings = FALSE)
-  saveRDS(groupUniqueSnps, resultToSave)
-
-  allUniqueVCF <- unique(do.call(rbind, groupUniqueSnps))
-  writeVcf(allUniqueVCF, vcfToSave)
-}
-
-
-"chr1_228761069_T_C" %in% rownames(groupUniqueSnps[["ATP13A2"]])
-"chr1_228761069_T_C" %in% rownames(groupUniqueSnps[["EWT-SNCA-A30P"]])
-```
-
-### All Intersections
-
-#### Generating the intersections for all the samples but parental
-
-```{r results ='asis'}
-vcf <- allUniqueVCF
-currSamples <- samplesDT[group != "parental", samples]
-
-dt <- cbind(
-  allele = rownames(geno(vcf)$GT),
-  data.table(geno(vcf)$GT)[, ..currSamples]
-)
-geno <- melt(
-  dt,
-  id.vars = "allele",
-  measure.vars = currSamples,
-  variable.name = "sample",
-  value.name = "geno"
-)
-geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
-samples <- geno[, unique(sample)]
-
-codes <- do.call(c, lapply(seq_len(floor(length(samples) / 26) + 1), function(i) {
-  if (26 * i < length(samples)) {
-    end <- 26
-  } else {
-    end <- length(samples) - 26 * (i - 1)
-  }
-  sapply(LETTERS[seq_len(end)], function(x) paste(rep(x, i), collapse = ""))
-}))
-
-void <- lapply(seq_along(codes), function(i) {
-  geno[sample == samples[i], sub := codes[i]]
-})
-
-geno
-
-combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
-combn <- unique(combi)
-combn <- combn[order(elementNROWS(strsplit(combn, "-")))]
-combi <- factor(combi, levels = combn)
-
-dt <- data.table(Combination = combi)
-
-dt1 <- dt[!is.na(Combination), .N, by = Combination]
-dt1[, nSample := elementNROWS(strsplit(as.character(Combination), "-"))]
-dt1 <- dt1[order(factor(Combination, levels = combn))]
-legend <- data.table(Code = codes, Sample = samples)
-
-cat("\n")
-cat("#### Number of SNPs shared among all edited cell lines\n")
-cat("##### Id to sample legend\n")
-print(tagList(datatable(legend)))
-cat("##### Number of SNPs per combination for all edited cell lines\n")
-print(tagList(datatable(dt1, options = list(order = list(list(2, "desc"))))))
-cat("\n")
-
-
-vcf
-
-sum(duplicated(row.names(vcf)))
-
-
-
-f <- !geno(vcf["chr1_228761069_T_C"])$GT %in% c("0/0", "./.", "./0", "0/.")
-
-geno(vcf["chr1_228761069_T_C"])$GT[f]
-
-
-colnames(vcf)[f]
-```
-
-### Phylo Tree
-
-#### Computing the phylogenic relationship of the different cell lines
-
-##### Rational:
-Now that we have the underlying algorithm, it's time to roll over every VCF file for each choromsome
-(For a gain of speed, we'll do that using parallel computing) and we will massage the data to return 
-something consumable
-
-##### Strategy:
-1. Define the parental samples
-2. Find the VCF files
-4. Reading the header of one VCF file, get the group tags
-5. In parallel, computed the unique SNPs VCF and stats
-6. Massage the data for compsution (and save the VCF to HD)
-
-#### Phylogenetic tree from only the SNPs unique to the edited cell lines
-
-```{r fig.height=10, fig.width=10, warning=FALSE, eval = FALSE}
-myVcfDist <- fastreeR::vcf2dist(inputFile = vcfToSave, threads = 2)
-myVcfTree <- fastreeR::dist2tree(inputDist = myVcfDist)
-
-plot(ape::read.tree(text = myVcfTree), direction = "rightwards", cex = 0.8)
-ape::add.scale.bar()
-ape::axisPhylo(side = 3)
-```
-
-### SNPs annotation
-
-#### Get the count of SNPs falling on different genomic features (Transcript centric)
-
-##### Rational:
-What type of genomic features are affected by the SNPS in each group
-
-##### Strategy:
-1. Load the genomic location of all gene and feature from the Hg38 TxDb library
-2. Roll over each group from the unique SNPs identified earlier
-3. Remove the sequences that are not found in the TxDb object (lots of decoy sequences)
-4. Get all the features overlaping a SNPs
-
-```{r}
-allGroup <- mclapply(groupUniqueSnps, function(vcf) {
-  seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
-  all <- locateVariants(vcf, txdb, AllVariants())
-
-  ## UPDATE 02/28/25
-  ## There's a bug with locateVariants(), intronic variants are wrong. Let's recode them
-  all <- all[all$LOCATION != "intron"]
-
-  ## Copying from the the VariantAnnotation repo, from the variantLocation() method
-  .location <-
-    function(length = 0, value = NA) {
-      levels <- c(
-        "spliceSite", "intron", "fiveUTR", "threeUTR",
-        "coding", "intergenic", "promoter"
-      )
-      factor(rep(value, length), levels = levels)
-    }
-
-  subject <- intronsByTranscript(txdb)
-  ## Remove items with no GRanges, that's the bug
-  subject <- subject[elementNROWS(subject) > 0]
-  query <- rowRanges(vcf)
-  vtype <- "intron"
-  ignore.strand <- FALSE
-  asHits <- FALSE
-
-  map <- mapToTranscripts(unname(query), subject,
-    ignore.strand = ignore.strand
-  )
-  if (length(map) > 0) {
-    xHits <- map$xHits
-    txHits <- map$transcriptsHits
-    tx <- names(subject)[txHits]
-    if (!is.null(tx)) {
-      txid <- tx
-    } else {
-      txid <- NA_integer_
-    }
-    ## FIXME: cdsid is expensive
-    cdsid <- IntegerList(integer(0))
-
-
-    ss <- runValue(strand(subject)[txHits])
-    if (any(elementNROWS(ss) > 1L)) {
-      warning(
-        "'subject' has multiple strands per list element; ",
-        "setting strand to '*'"
-      )
-      sstrand <- Rle("*", length(txHits))
-    }
-    sstrand <- unlist(ss, use.names = FALSE)
-    res <- GRanges(
-      seqnames = seqnames(query)[xHits],
-      ranges = IRanges(ranges(query)[xHits]),
-      strand = sstrand,
-      LOCATION = .location(length(xHits), vtype),
-      LOCSTART = start(map),
-      LOCEND = end(map),
-      QUERYID = xHits,
-      TXID = txid,
-      CDSID = cdsid,
-      GENEID = NA_character_,
-      PRECEDEID = CharacterList(character(0)),
-      FOLLOWID = CharacterList(character(0))
-    )
-  }
-  res$GENEID <- select(
-    txdb, as.character(res$TXID),
-    "GENEID", "TXID"
-  )$GENEID
-
-  all <- c(all, res)
-
-  ## Reorder the GRanges based on the names of the original VCF
-  all[factor(names(all), levels = names(vcf))]
-}, mc.cores = detectCores(), mc.preschedule = FALSE)
-```
-
-#### Tabulate the count of features per group
-
-```{r, message=FALSE}
-featuresPerGroup <- do.call(rbind, lapply(names(allGroup), function(group) {
-  all <- allGroup[[group]]
-  df <- as.data.frame(table(all$LOCATION))
-  names(df) <- c("feature", "count")
-  df$group <- group
-  setDT(df)
-}))
-
-datatable(dcast(featuresPerGroup, group ~ feature, value.var = "count"))
-```
-
-#### Samples to code legend for the different edited cell line groups
 ```{r message=FALSE}
-rawResult <- lapply(names(allGroup), function(currGroup) {
-  ## Get the combination of samples for each SNPs
-  vcf <- groupUniqueSnps[[currGroup]]
-  currSamples <- samplesDT[group == currGroup, samples]
-  dt <- cbind(
-    allele = rownames(geno(vcf)$GT),
-    data.table(geno(vcf)$GT)[, ..currSamples]
-  )
+## Location of the SNP in TAF4
+snp <- GRanges("chr20", IRanges(62003269))
 
-  geno <- melt(
-    dt,
-    id.vars = "allele",
-    measure.vars = currSamples,
-    variable.name = "sample",
-    value.name = "geno"
-  )
-  geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
-
-  samples <- geno[, unique(sample)]
-  codes <- LETTERS[seq_along(samples)]
-
-  void <- lapply(seq_along(codes), function(i) {
-    geno[sample == samples[i], sub := codes[i]]
-  })
-
-  combn <- unlist(lapply(do.call(
-    c,
-    lapply(seq_along(codes), combn, x = codes, simplify = FALSE)
-  ), paste, collapse = "-"))
-
-  combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
-
-  all <- allGroup[[currGroup]]
-
-  dt <- do.call(rbind, lapply(levels(all$LOCATION), function(feature) {
-    f <- all$LOCATION == feature
-
-    gid <- all[f]$GENEID
-    snpID <- names(all)[f] ## UPDATE 12/20/24
-    snpLocation <- paste0(seqnames(all[f]), ":", start(all[f]), "-", end(all[f])) ## UPDATE 12/20/24
-
-    f2 <- !is.na(gid)
-    gid <- gid[f2]
-    snpID <- snpID[f2]
-    snpLocation <- snpLocation[f2] ## UPDATE 12/20/24
-
-    dt <- data.table(select(org.Hs.eg.db, gid, c("SYMBOL", "GENENAME", "GENETYPE"), "ENTREZID"))
-    dt$group <- currGroup
-    dt$feature <- feature
-    dt$location <- snpLocation
-    dt$combi <- combi[snpID]
-    return(unique(dt[, ENTREZID := NULL]))
-  }))
-  legend <- data.table(
-    group = currGroup,
-    sample = samples,
-    code = codes
-  )
-  return(list(legend = legend, dt = dt))
-})
-names(rawResult) <- names(allGroup)
-
-datatable(do.call(rbind, lapply(rawResult, "[[", "legend")))
+vcfObjectsFile <- file.path("data", "unique_SNPs_vs_all.Rds")
+vcfs <- readRDS(vcfObjectsFile)
+vcf <- vcfs[["ATP13A2"]]
+vcf <- keepStandardChromosomes(vcf)
+vcf <- vcf[rowRanges(vcf) == snp]
+rowRanges(vcf)
 ```
 
-#### List the genes affected by the SNPs in each type of feature (excluding introns and promoter)
-```{r results ='asis'}
-write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "SNP_annotations_grouping_keys.csv"))
-write.csv(do.call(rbind, lapply(rawResult, "[[", "dt")), file.path("data", "SNP_annotations.csv"))
 
-for (currGroup in names(rawResult)) {
-  cat("\n")
-  cat("#### List of Genes with SNPs in", currGroup, "edited cell lines\n")
-  print(
-    tagList(
-      datatable(rawResult[[currGroup]]$dt[!feature %in% c("promoter", "intron")])
-    )
-  )
-  cat("\n")
-}
-```
 
-### Gene Frequencies
-
-#### Looking at genes frequently found in many groups
-
-##### Frequencies of common genes in the groups of edited cell lines
+## Locating the SNPs associated with TAF4
 ```{r message=FALSE}
-gid <- do.call(c, lapply(allGroup, function(all) {
-  gid <- unique(all[!all$LOCATION %in% c("intron", "promoter", "intergenic")]$GENEID)
-  gid[!is.na(gid)]
-}))
+cds <- locateVariants(vcf, txdb, CodingVariants())
 
-ez2id <- select(org.Hs.eg.db, gid, "SYMBOL", "ENTREZID")
+data.frame(cds$QUERYID, cds$TXID, cds$GENEID)
+```
 
-tt <- table(ez2id$SYMBOL)
+## Finding it's influence on the coding sequence
+```{r message=FALSE}
+aa <- predictCoding(vcf, txdb, Hsapiens)
 
-tt <- tt[order(tt, decreasing = TRUE)]
-
-datatable(as.data.frame(tt))
+aa
+data.frame(aa$QUERYID, aa$TXID, aa$GENEID)
+aa
 ```
 
 
-### CDS impact
-
-#### Compute the effect of SNPs falling over coding sequences
-
-```{r message=FALSE, results='asis'}
-results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
-  ## Get the combination of samples for each SNPs
-
-  currSamples <- samplesDT[group == currGroup, samples]
-  vcf <- groupUniqueSnps[[currGroup]][, currSamples]
-
-  dt1 <- cbind(
-    allele = rownames(geno(vcf)$GT),
-    data.table(geno(vcf)$GT)[, ..currSamples]
-  )
-  geno <- melt(
-    dt1,
-    id.vars = "allele",
-    measure.vars = currSamples,
-    variable.name = "sample",
-    value.name = "geno"
-  )
-  geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
-
-  samples <- geno[, unique(sample)]
-  codes <- LETTERS[seq_along(samples)]
-
-  void <- lapply(seq_along(codes), function(i) {
-    geno[sample == samples[i], sub := codes[i]]
-  })
-
-  combn <- unlist(lapply(do.call(
-    c,
-    lapply(seq_along(codes), combn, x = codes, simplify = FALSE)
-  ), paste, collapse = "-"))
-
-  combi <- tapply(geno$sub, geno$allele, paste, sep = "-", collapse = "-")
-
-  seqlevels(vcf) <- seqlevels(vcf)[seqlevels(vcf) %in% seqlevels(txdb)]
-  cds <- unique(locateVariants(vcf, txdb, CodingVariants()))
-
-  aa <- unique(predictCoding(vcf[cds$QUERYID], txdb, Hsapiens))
-  aa <- aa[!is.na(aa$GENEID)]
-
-  if (length(aa) > 0) {
-    gt <- apply(data.table(geno(vcf[names(aa)])$GT)[, ..currSamples], 1, function(x) {
-      paste(unique(x[!x %in% c("0/0", "./.", "./0", "0/.")]), collapse = ",")
-    })
-
-
-    dt <- data.table(
-      REF = as.character(aa$REF),
-      ALT = sapply(aa$ALT, paste, collapse = ","),
-      GT = gt,
-      location = paste0(seqnames(aa), ":", start(aa), "-", end(aa)), ## UPDATE 12/20/24
-      consequence = aa$CONSEQUENCE,
-      combi = as.character(combi[names(aa)])
-    )
-    dt <- cbind(select(org.Hs.eg.db, aa$GENEID, c("SYMBOL", "GENENAME"), "ENTREZID"), dt)
-
-    setDT(dt)
-
-    unique(dt[, ENTREZID := NULL])
-  } else {
-    dt <- data.table(
-      SYMBOL = character(),
-      GENENAME = character(),
-      REF = character(),
-      ALT = character(),
-      location = character(), ## UPDATE 12/20/24
-      consequence = character(),
-      combi = character()
-    )
-  }
-}, mc.cores = detectCores(), mc.preschedule = FALSE)
-names(results2) <- names(groupUniqueSnps)
-
-write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "CDS_impact_grouping_keys.csv"))
-results3 <- cbind(do.call(rbind, results2),
-  group = rep(names(results2), sapply(results2, nrow))
-)
-write.csv(results3, file.path("data", "CDS_impact.csv"))
-
-for (currGroup in names(results2)) {
-  cat("\n")
-  cat("#### Coding sequence impact in", currGroup, "edited cell lines\n")
-  print(
-    tagList(
-      datatable(results2[[currGroup]])
-    )
-  )
-  cat("\n")
-}
-```
-
-### sessionInfo
 ```{r}
-sessionInfo()
+library(org.Hs.eg.db)
+
+keytypes(org.Hs.eg.db)
+columns(org.Hs.eg.db)
+
+genes <- c("TAF4","GBA1","PCDHB2","SPESP1")
+genes
+
+ezid <- select(org.Hs.eg.db,genes,"ENTREZID","SYMBOL")$ENTREZID
+
+
+## All of the genes are in the txdb database
+all(ezid %in% keys(txdb,'GENEID'))
+
+
+tx <- transcriptsBy(txdb, "gene")
+
+tx[ezid]
+
+ezid %in% names(tx)
+
+gene.id <- unique(select(txdb, aa$TXID[is.na(aa$GENEID)], "GENEID", "TXID")$GENEID)
+
+ex <- exonsBy(txdb, "gene")
+
+ex[txid]
+
+ex <- exons(txdb)
+
+ex
+
+keytypes(txdb)
+
+tt <- ex[ex$exon_id %in% select(txdb, gene.id, "EXONID", "GENEID")$EXONID]
+
+tt
+seqnames(tt)
+start(tt)
+end(tt)
+end(tt) - start(tt)
+strand(tt)
+tx
+
+tx[unique(select(txdb, aa$TXID[is.na(aa$GENEID)], "GENEID", "TXID")$GENEID)]
+
+tx
+
+cds$GENEID
+
+txdb
 ```
