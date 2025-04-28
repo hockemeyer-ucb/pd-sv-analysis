@@ -217,7 +217,7 @@ render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 This analysis uses files specific for the Parkinson Disease CRISPR engineered cell lines. If you would like to run this analysis, the following files
 in the supporting_files directory will need to be updated to your design.
 
-#### [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
+#### [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
 
 The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
 column header:
@@ -227,7 +227,7 @@ column header:
 - meta: Additional group relation
 - editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
 
-#### [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
+#### [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
 
 The iSCORE-PD_cells_grouped_by_editing_methods.csv is an extention of the previous file with extra columns with the Id of the RNA guide(s)
 used to edit each cell lines. The two files could be consolidated but where kept seperate for the ability to change the samples analyzed
