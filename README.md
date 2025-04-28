@@ -204,7 +204,7 @@ for x in {1..22} X Y;do wget -P SNV  "https://pd-cell-lines-data.s3.us-west-2.am
 
 ### Analyse the full dataset
 
-The scripts will pick up eachindivuals gunzipped VCF files in the SNV directory and run with them. From an R terminal, simply run the
+The scripts will pick up each indivuals gunzipped VCF files in the SNV directory and run with them. From an R terminal, simply run the
 folowing command and be patient. On a 16 CPU linux machine, it takes ~2 hrs.
 
 ```{R}
@@ -217,12 +217,7 @@ render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 This analysis uses files specific for the Parkinson Disease CRISPR engineered cell lines. If you would like to run this analysis, the following files
 in the supporting_files directory will need to be updated to your design.
 
-- [sgRNA.txt](supporting_files/sgRNA.txt)
-- [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
-- [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
-- [cas-offinder-out.txt](supporting_files/cas-offinder-out.txt)
-
-#### iSCORE-PD_cells_grouped_with_guides.csv
+#### [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
 
 The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
 column header:
@@ -232,7 +227,7 @@ column header:
 - meta: Additional group relation
 - editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
 
-#### iSCORE-PD_cells_grouped_by_editing_methods.csv
+#### [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
 
 The iSCORE-PD_cells_grouped_by_editing_methods.csv is an extention of the previous file with extra columns with the Id of the RNA guide(s)
 used to edit each cell lines. The two files could be consolidated but where kept seperate for the ability to change the samples analyzed
@@ -247,7 +242,7 @@ used up to 3 guides, so we add 3 extra columns and for each lines with list the 
 - guide2
 - guide3
 
-#### sgRNA.txt
+#### [sgRNA.txt](supporting_files/sgRNA.txt)
 
 This file is used by (Cas-OFFinder)[https://github.com/snugel/cas-offinder] to predict the putative location of CRISPR Off-target sites.
 It starts with the location of the chromsome FASTA files for the [human Hg38 chromosomes](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz)
@@ -265,7 +260,7 @@ TCATAGGAATCTTGAATACTNNN	5	SNCA_A53T_nc
 CAGGGTGTGGCAGAAGCAGCNNN	5	SNCA_A30P_peg
 ```
 
-#### cas-offinder-out.txt
+#### [cas-offinder-out.txt](supporting_files/cas-offinder-out.txt)
 
 The cas-offinder-out.txt file is the output of running (Cas-OFFinder)[https://github.com/snugel/cas-offinder]. It was run once using
 [sgRNA.txt](supporting_files/sgRNA.txt) as input like this on a GPU instance on AWS:
