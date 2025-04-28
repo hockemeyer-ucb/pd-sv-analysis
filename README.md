@@ -217,6 +217,58 @@ This analysis uses files specific for the Parkinson Disease CRISPR engineered ce
 in the supporting_files directory will need to be updated to your design.
 
 - [sgRNA.txt](supporting_files/sgRNA.txt)
-- supporting_files/iSCORE-PD_cells_grouped_with_guides.csv
+- [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
+- [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
+- [cas-offinder-out.txt](supporting_files/cas-offinder-out.txt)
 
-## Creating you own supplemental CAS-Offinder supporing files
+#### iSCORE-PD_cells_grouped_with_guides.csv
+
+The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
+column header:
+
+- samples: Sample ID
+- group: Group ID
+- meta: Additional group relation
+- editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
+
+#### iSCORE-PD_cells_grouped_by_editing_methods.csv
+
+The iSCORE-PD_cells_grouped_by_editing_methods.csv is an extention of the previous file with extra columns with the Id of the RNA guide(s)
+used to edit each cell lines. The two files could be consolidated but where kept seperate for the ability to change the samples analyzed
+in one or the other files. The extra columns represent the maximal number of guides used in any of the cell lines. In our case, some edits
+used up to 3 guides, so we add 3 extra columns and for each lines with list the Id of the guides used (either one, two or three guide IDs)
+
+- samples: Sample ID
+- group: Group ID
+- meta: Additional group relation
+- editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
+- guide1
+- guide2
+- guide3
+
+#### sgRNA.txt
+
+This file is used by (Cas-OFFinder)[https://github.com/snugel/cas-offinder] to predict the putative location of CRISPR Off-target sites.
+It starts with the location of the chromsome FASTA files for the [human Hg38 chromosomes](https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz)
+on your local hard drive. The second line correspond to the type of RNA used for the search with the size of the RNA and DNA bulge
+(Details can be found with the (Cas-OFFinder)[https://github.com/snugel/cas-offinder] documentation). Then the following lines are the RNA sequences for each guide
+with the number of missmatch to be considered.
+
+For examples:
+
+```
+/home/ubuntu/working/genomes/hg38.fullAnalysisSet.chroms
+NNNNNNNNNNNNNNNNNNNNNRG
+GGAGGGAGTGGTGCATGGTGNNN	5	SNCA_A53T_peg
+TCATAGGAATCTTGAATACTNNN	5	SNCA_A53T_nc
+CAGGGTGTGGCAGAAGCAGCNNN	5	SNCA_A30P_peg
+```
+
+#### cas-offinder-out.txt
+
+The cas-offinder-out.txt file is the output of running (Cas-OFFinder)[https://github.com/snugel/cas-offinder]. It was run once using
+[sgRNA.txt](supporting_files/sgRNA.txt) as input like this on a GPU instance on AWS:
+
+```{bash}
+cas-offinder sgRNA.txt G cas-offinder-out.txt
+```
