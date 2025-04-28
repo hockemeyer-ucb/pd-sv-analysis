@@ -97,6 +97,7 @@ remotes::install_github("nx10/httpgd")
 **From R terminal:**
 
 ```{R}
+options(Ncpus = parallel::detectCores())
 install.packages("rmarkdown")
 ```
 
