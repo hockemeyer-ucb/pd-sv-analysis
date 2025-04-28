@@ -4,13 +4,13 @@
 
 ### Software
 
-- [R](https://cran.r-project.org/)
-- [Java Runtime (JRE)](https://www.oracle.com/java/technologies/downloads/?er=221886)
+- [R 4.5](https://cran.r-project.org/)
+- [Java Runtime (JRE) 21.0.1](https://www.oracle.com/java/technologies/downloads/?er=221886)
 - [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 - [wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/)
 - C compiler with make if running from Linux
 
-### Additional libraries if installing from vanilla ubuntu
+### Additional libraries if installing from vanilla Ubuntu 24.04 LTS
 
 ```{bash}
 ## Update apt packages
