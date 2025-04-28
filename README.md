@@ -128,17 +128,19 @@ curl --create-dirs -O --output-dir pd-sv-analysis/SNV 'https://pd-cell-lines-dat
 
 ## Suggested hardware
 
+The script will read the VCF files in parallel up to the max number of CPU and will consume copius amount of RAM during the serialization process. It has been successully develop and tested using the following parameters. Please note that in it's current version, the script will crash an instance with 8 CPU and 64 Gb of RAM.
+
 - OS: Ubuntu 24.04 LTS
 - Architecture: ARM64
 - Diskspace: 25 Gb
 - CPU: 16
-- RAM: 32 Gb
+- RAM: 124 Gb
 - Test dataset runtime: ~5 mins
 - Full dataset runtime: ~2 hrs
 
-I have successfully run the test and the full data set on a MacBook Air with Apple M3 AMD64 chipset with 8 CPUs and 16Gb of RAM.
+I have successfully run the test data on a MacBook Air with Apple M3 AMD64 chipset with 8 CPUs and 24Gb of RAM in less than 5 minutes.
 
-## Knit the RMakdown documents (with .Rmd files)
+## Kniting the RMarkdown documents (with .Rmd files)
 
 The 00_main_document_Run1and2.Rmd is the main file referencing all the other children files. To knit
 (i.e to generate an html report), run the following commands from an R terminal:
@@ -151,7 +153,7 @@ render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 This will generate an standalone html report in the html_output directory.
 
 If loading the .Rmd file from [RStudio](https://posit.co/download/rstudio-desktop/) or [VScode](https://code.visualstudio.com/),
-the kniting command will automatically create the document in the final html_output directory.
+their kniting command will automatically create the document in the final html_output directory.
 
 ## Analyzing the full dataset
 
@@ -217,15 +219,22 @@ render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 This analysis uses files specific for the Parkinson Disease CRISPR engineered cell lines. If you would like to run this analysis, the following files
 in the supporting_files directory will need to be updated to your design.
 
+#### [iSCORE-PD_design.csv](supporting_files/iSCORE-PD_design.csv)
+
+the iSCORE-PD_design.csv file is a comma seperated text file starting with a header and with one cell line per line with the following column header:
+
+the iSCORE-PD_design.csv
+
 #### [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
 
 The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
 column header:
 
-- samples: Sample ID
-- group: Group ID
-- meta: Additional group relation
-- editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
+- samples: Sample ID found in VCF header of the joint genotyping output file
+- group: Group ID linking the sample in group
+- meta: Additional group relation. Not used anymore
+
+It is used to establish the sample in the VCF to the different cell line edited group. In our analysis, each CRISPR edit has serveral cell line clones.
 
 #### [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
 
