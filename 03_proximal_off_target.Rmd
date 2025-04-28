@@ -37,49 +37,17 @@ txdb <- keepStandardChromosomes(txdb)
 Let's create a table where the samples in the VCF are associated with a group representing a set
 of clones carrying the same CRISPR edit type.
 
-##### Strategy:
-1. Get the samples from one of the VCF header
-2. Define what samples are part of the parental group
-3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
-4. Using REGEXP, assign a unique group to each sample
+##### Format:
+The iSCORE-PD_design.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
+columns:
+
+- samples: Sample ID found in VCF header of the joint genotyping output file
+- group: Group ID linking the sample in group
+- meta: Additional group relation. Not used anymore
 
 ```{r}
-## Set a table of sample to group from one of the VCF file
-vcf.files <- list.files("SNV", "\\.vcf\\.gz$", full = TRUE)
-## define the parents
-parents <- "WIBR3_parental"
-## create the association table
-samplesDT <- data.table(samples = samples(scanVcfHeader(vcf.files[1])))
-
-## UPDATE 12/20/24
-## Cells to remove
-cells2Remove <- c("WIBR3_PLA2G6_D331Y_A4_C2", "WIBR3_PLA2G6_E11_5", "WIBR3_ATP13A2_FS_Homo_12_2")
-samplesDT <- samplesDT[!samples %in% cells2Remove]
-
-samplesDT[, tmp := samples]
-samplesDT[grep("SNCA", samples), tmp := sub("SNCA_", "SNCA-", samples)]
-samplesDT[grep("VPS13C", samples), tmp := sub("VPS13C_", "VPS13C-", samples)]
-samplesDT[, group := sub(".+?_(.+?)_.+", "\\1", tmp)]
-
-## UPDATE 12/20/24
-## Reasign groups
-samplesDT[samples == "WIBR3_VPS13C_FS_Homo_H3_1", group := "VPS13C-A444P"]
-samplesDT[samples == "WIBR3_VPS13C_FS_Homo_E10_2", group := "VPS13C-W395C"]
-
-samplesDT[samples %in% parents, group := "parental"]
-samplesDT[grep("EWT_S(4|5)", samples), group := "GBA1"]
-samplesDT[grep("EWT_S(1|2|3)", samples), group := "SNCA-A30P"]
-samplesDT[grep("EWT_S(6|7|8)", samples), group := "EWT-OTHERS"]
-samplesDT[grep("WIBR3_S\\d", samples), group := "S_Group"]
-samplesDT[, tmp := NULL]
-
-## Adding a meta column to group the EWT and the correspoding edit cells
-meta <- samplesDT[grep("EWT", group), sub("EWT-", "", group)]
-samplesDT[grep("EWT", group), meta := sub("EWT-", "", group)]
-samplesDT[group %in% meta, meta := group]
-
-## Print the table of samples
-datatable(samplesDT, options = list(pageLength = 25))
+samplesDT <- setDT(read.csv("./supporting_files/iSCORE-PD_design.csv"))
+datatable(samplesDT)
 ```
 
 #### Loading the data
