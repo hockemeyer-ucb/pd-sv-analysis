@@ -1,8 +1,8 @@
 # iSCORE-PD SNV analysis
 
-## Pre-requesite
+## Prerequesites
 
-### Software
+### Softwares
 
 - [R 4.5](https://cran.r-project.org/)
 - [Java Runtime (JRE) 21.0.1](https://www.oracle.com/java/technologies/downloads/?er=221886)
