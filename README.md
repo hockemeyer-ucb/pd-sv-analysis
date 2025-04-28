@@ -136,7 +136,7 @@ curl --create-dirs -O --output-dir pd-sv-analysis/SNV 'https://pd-cell-lines-dat
 - Test dataset runtime: ~5 mins
 - Full dataset runtime: ~2 hrs
 
-I have successfully run the test and the full data set on a MacBook Air with 8 CPUs and 16Gb of RAM.
+I have successfully run the test and the full data set on a MacBook Air with Apple M3 AMD64 chipset with 8 CPUs and 16Gb of RAM.
 
 ## Knit the RMakdown documents (with .Rmd files)
 
