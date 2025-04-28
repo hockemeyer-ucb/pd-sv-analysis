@@ -4,6 +4,7 @@ output:
   html_document:
     df_print: paged
     code_folding: hide
+    code_download: true
 knit: (function(input, ...) {
     rmarkdown::render(
       input,
@@ -12,13 +13,13 @@ knit: (function(input, ...) {
   })
 ---
 ```{r include = FALSE}
+library(httpgd)
 library(data.table)
 library(VariantAnnotation)
 library(parallel)
 library(DT)
 library(htmltools)
 library(ggplot2)
-library(httpgd)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library(org.Hs.eg.db)
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
@@ -507,8 +508,12 @@ dd <- do.call(rbind, mclapply(names(groupUniqueSnps), function(currGroup) {
   }))
 }, mc.cores = detectCores(), mc.preschedule = FALSE))
 
-datatable(dd[order(group)]) %>%
-  formatStyle(c("PAM", "seq"), fontFamily = "monospace, monospace")
+if (nrow(dd)) {
+  datatable(dd[order(group)]) %>%
+    formatStyle(c("PAM", "seq"), fontFamily = "monospace, monospace")
+}
+
+dd
 ```
 
 ### sessionInfo

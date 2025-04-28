@@ -4,6 +4,7 @@ output:
   html_document:
     df_print: paged
     code_folding: hide
+    code_download: true
 knit: (function(input, ...) {
     rmarkdown::render(
       input,
@@ -22,9 +23,6 @@ library(parallel)
 library(DT)
 library(htmltools)
 library(ggplot2)
-library(fastreeR)
-library(ape)
-library(gridExtra)
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
 txdb <- keepStandardChromosomes(txdb)
 ```
@@ -165,8 +163,11 @@ dists <- mclapply(names(groupUniqueSnps), function(currGroup) {
 
 names(dists) <- names(groupUniqueSnps)
 
+dists <- dists[elementNROWS(dists) > 0]
+
 void <- lapply(names(dists), function(group) {
   df <- dists[[group]]
+  df <- df[!is.na(df$distance), ]
   p <- ggplot(df, aes(log10(distance), color = sample)) +
     geom_histogram(binwidth = 0.05) +
     facet_grid(rows = vars(sample), scales = "free_y") +

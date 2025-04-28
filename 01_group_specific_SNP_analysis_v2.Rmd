@@ -4,6 +4,7 @@ output:
   html_document:
     df_print: paged
     code_folding: hide
+    code_download: true
 knit: (function(input, ...) {
     rmarkdown::render(
       input,
@@ -15,7 +16,6 @@ knit: (function(input, ...) {
 options(java.parameters = "-Xmx90G")
 library(httpgd)
 library(VariantAnnotation)
-library(httpgd)
 library(data.table)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library(BSgenome.Hsapiens.UCSC.hg38)
@@ -200,8 +200,6 @@ geno <- melt(
 geno <- geno[!geno %in% c("0/0", "./.", "./0", "0/."), ]
 samples <- geno[, unique(sample)]
 
-dt
-
 codes <- do.call(c, lapply(seq_len(floor(length(samples) / 26) + 1), function(i) {
   if (26 * i < length(samples)) {
     end <- 26
@@ -364,19 +362,6 @@ featuresPerGroup <- do.call(rbind, lapply(names(allGroup), function(group) {
 }))
 
 datatable(dcast(featuresPerGroup, group ~ feature, value.var = "count"))
-
-vcf <- groupUniqueSnps[["VPS13C-A444P"]]
-snp <- GRanges('chr15',IRanges(62000563))
-
-
-
-snp %within% rowRanges(vcf)
-
-o.l <- findOverlaps(snp,rowRanges(vcf))
-
-
-rowRanges(vcf[subjectHits(o.l)])
-
 ```
 
 #### Samples to code legend for the different edited cell line groups
@@ -556,7 +541,9 @@ results2 <- mclapply(names(groupUniqueSnps), function(currGroup) {
     )
   }
 }, mc.cores = detectCores(), mc.preschedule = FALSE)
+
 names(results2) <- names(groupUniqueSnps)
+results2 <- results2[elementNROWS(results2) > 0]
 
 write.csv(do.call(rbind, lapply(rawResult, "[[", "legend")), file.path("data", "CDS_impact_grouping_keys.csv"))
 
@@ -581,9 +568,6 @@ for (currGroup in names(results2)) {
 
 ```{r}
 sampleNames <- unique(c(names(rawResult), names(results2)))
-
-## Make sure both list have same samples
-all(sampleNames %in% names(rawResult)) & all(sampleNames %in% names(results2))
 
 ## Make sures all snp located in coding feature from first table
 ## Are the list of coding impact in second table

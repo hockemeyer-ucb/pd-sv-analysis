@@ -12,21 +12,13 @@ knit: (function(input, ...) {
   })
 ---
 ```{r include = FALSE}
-options(java.parameters = "-Xmx90G")
 library(httpgd)
 library(VariantAnnotation)
 library(data.table)
-library(TxDb.Hsapiens.UCSC.hg38.knownGene)
-library(BSgenome.Hsapiens.UCSC.hg38)
-library(org.Hs.eg.db)
 library(parallel)
 library(DT)
 library(htmltools)
 library(ggplot2)
-library(fastreeR)
-library(ape)
-library(gridExtra)
-txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
 ```
 
 ## GT imbalances {.tabset .tabset-fade .tabset-pills}

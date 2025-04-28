@@ -4,6 +4,7 @@ output:
   html_document:
     df_print: paged
     code_folding: hide
+    code_download: true
 knit: (function(input, ...) {
     rmarkdown::render(
       input,
@@ -177,6 +178,10 @@ dt2[, total := sum(.SD), by = group]
 dt2 <- dt2[samplesDT[group != "parental", .N, by = group], on = .(group)]
 dt2[, mean := round(total / N)]
 
+dt2
+
+
+
 dt2 <- dt2[
   order(factor(group,
     levels = c(
@@ -184,7 +189,7 @@ dt2 <- dt2[
       grep("EWT", unique(group), value = TRUE, invert = TRUE)
     )
   )),
-  c("group", "N", "total", "mean", paste0("chr", c(1:22, "X")))
+  c("group", "N", "total", "mean", sort(grep("chr.+", colnames(dt2), value = TRUE)))
 ]
 dt2
 ```
