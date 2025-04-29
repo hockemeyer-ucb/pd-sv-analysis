@@ -16,7 +16,7 @@ self-contained standalone html report of the [full set of analyses](https://pd-c
 
 ### Additional libraries if installing from vanilla Ubuntu 24.04 LTS
 
-```{bash}
+```bash
 ## Update apt packages
 sudo apt update -y
 
@@ -53,7 +53,7 @@ sudo R CMD javareconf
 
 **From R terminal:**
 
-```{R}
+```r
 install.packages("BiocManager")
 ```
 
@@ -76,7 +76,7 @@ install.packages("BiocManager")
 
 **From R terminal:**
 
-```{R}
+```r
 options(Ncpus = parallel::detectCores())
 
 BiocManager::install(c("remotes",
@@ -102,7 +102,7 @@ remotes::install_github("nx10/httpgd")
 
 **From R terminal:**
 
-```{R}
+```r
 options(Ncpus = parallel::detectCores())
 install.packages("rmarkdown")
 ```
@@ -111,7 +111,7 @@ install.packages("rmarkdown")
 
 Clone the repo:
 
-```{bash}
+```bash
 git clone https://github.com/hockemeyer-ucb/pd-sv-analysis.git
 ```
 
@@ -122,13 +122,13 @@ in a directory named SNV within the pd-sv-analysis repo.
 
 **wget**
 
-```{bash}
+```bash
 wget -P pd-sv-analysis/SNV 'https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/joint-genotyping/study-chr22.vcf.gz'
 ```
 
 **curl**
 
-```{bash}
+```bash
 curl --create-dirs -O --output-dir pd-sv-analysis/SNV 'https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/joint-genotyping/study-chr22.vcf.gz'
 ```
 
@@ -151,7 +151,7 @@ I have successfully run the test data on a MacBook Air with Apple M3 AMD64 chips
 The 00_main_document_Run1and2.Rmd is the main file referencing all the other children files. To knit
 (i.e to generate an html report), run the following commands from an R terminal:
 
-```{R}
+```r
 library(rmarkdown)
 render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 ```
@@ -171,7 +171,7 @@ SNV directory with the files in the data directory.
 
 From within the pd-sv-analysis repo, run:
 
-```{bash}
+```bash
 rm -rf SNV data
 ```
 
@@ -206,7 +206,7 @@ The joint genotypes for all cell lines for each chromosome can be found here:
 
 Here's a simple one liner to download all the files, run in bash from the pd-sv-analysis directory
 
-```{bash}
+```bash
 for x in {1..22} X Y;do wget -P SNV  "https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/joint-genotyping/study-chr${x}.vcf.gz"; done
 ```
 
@@ -215,7 +215,7 @@ for x in {1..22} X Y;do wget -P SNV  "https://pd-cell-lines-data.s3.us-west-2.am
 The scripts will pick up each indivuals gunzipped VCF files in the SNV directory and run with them. From an R terminal, simply run the
 folowing command and be patient. On a 16 CPU linux machine, it takes ~2 hrs.
 
-```{R}
+```r
 library(rmarkdown)
 render("./00_main_document_Run1and2.Rmd", output_dir = "html_output")
 ```
@@ -283,6 +283,6 @@ CAGGGTGTGGCAGAAGCAGCNNN	5	SNCA_A30P_peg
 The cas-offinder-out.txt file is the output of running (Cas-OFFinder)[https://github.com/snugel/cas-offinder]. It was run once using
 [sgRNA.txt](supporting_files/sgRNA.txt) as input like this on a GPU instance on AWS:
 
-```{bash}
+```bash
 cas-offinder sgRNA.txt G cas-offinder-out.txt
 ```
