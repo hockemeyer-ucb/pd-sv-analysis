@@ -1,3 +1,8 @@
+---
+layout: post
+title: Blogging Like a Hacker
+---
+
 # iSCORE-PD SNV analysis
 
 This is a set of Rmarckdown files with scripts used to analyze the genotypes and the potential CRISPR off-targets in the
