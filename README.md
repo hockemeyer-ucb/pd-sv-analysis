@@ -8,8 +8,8 @@ selfcontained standalone html report of the [full set of analyses](https://pd-ce
 
 ### Softwares
 
-- [R 4.5](https://cran.r-project.org/)
-- [Java Runtime (JRE) 21.0.1](https://www.oracle.com/java/technologies/downloads/?er=221886)
+- [R 4.5.0](https://cran.r-project.org/)
+- [Java Runtime (JRE) 21.0.6](https://www.oracle.com/java/technologies/downloads/?er=221886)
 - [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
 - [wget](https://www.gnu.org/software/wget/) or [curl](https://curl.se/)
 - C compiler with make if running from Linux
@@ -21,7 +21,9 @@ selfcontained standalone html report of the [full set of analyses](https://pd-ce
 sudo apt update -y
 
 ## Install Ubuntu libraries and dependencies
-sudo apt install -y libssl-dev /
+sudo apt install -y /
+  build-essential /
+  libssl-dev /
   libcurl4-openssl-dev /
   libpng-dev /
   libxml2-dev /
