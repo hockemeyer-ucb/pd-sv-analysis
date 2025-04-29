@@ -1,8 +1,8 @@
 # iSCORE-PD SNV analysis
 
-This is a set of R scripts used to analyze the genotype and the potential CRISPR off-targets in the
-iSCORE-PD cell line collections. the main document, 00_main_document_Run1and2.Rmd will generate a
-selfcontained standalone html report of the [full set of analyses](https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/pd-sv-analysis/html_output/00_main_document_Run1and2.html).
+This is a set of Rmarckdown files with scripts used to analyze the genotypes and the potential CRISPR off-targets in the
+iSCORE-PD cell line collection. the main document, 00_main_document_Run1and2.Rmd will generate a
+self-contained standalone html report of the [full set of analyses](https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/pd-sv-analysis/html_output/00_main_document_Run1and2.html).
 
 ## Prerequesites
 
