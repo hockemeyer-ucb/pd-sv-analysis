@@ -37,11 +37,17 @@ txdb <- keepStandardChromosomes(txdb)
 Let's create a table where the samples in the VCF are associated with a group representing a set
 of clones carrying the same CRISPR edit type.
 
-##### Strategy:
-1. Get the samples from one of the VCF header
-2. Define what samples are part of the parental group
-3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
-4. Using REGEXP, assign a unique group to each sample
+##### Format:
+The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
+column header:
+
+- samples: Sample ID
+- group: Group ID
+- meta: Additional group relation. Not used anymore
+- editing_group: Method used for the editing (Cas9, TALEN, PE)
+- guide1
+- guide2
+- guide3
 
 ```{r}
 ## Set a table of sample to group from one of the VCF file
@@ -152,7 +158,7 @@ if (file.exists(resultToSave) && file.exists(vcfToSave)) {
 
 ### sgRNA
 
-#### Load the table of sgRNA from Hanqin
+#### Loading the table of sgRNA
 
 ```{R}
 sgRNA <- setDT(read.delim("./supporting_files/sgRNA.txt", header = FALSE))
@@ -163,7 +169,7 @@ datatable(sgRNA) %>%
 
 #### Run cas-offinder
 
-*This is how I ran cas-offinder on the GPU based instance in us-east-1 zone*
+*This is how cas-offinder was run on the GPU based instance in us-east-1 zone*
 
 ```{bash eval=FALSE}
 cas-offinder sgRNA.txt G cas-offinder-out.txt
@@ -193,7 +199,7 @@ datatable(head(casOff, 50)) %>%
 ```
 
 
-#### Is cas-offinder hits the targeted gene?
+#### Is cas-offinder hit the targeted gene?
 
 ```{r warning=FALSE, message=FALSE}
 genes <- genes(txdb)

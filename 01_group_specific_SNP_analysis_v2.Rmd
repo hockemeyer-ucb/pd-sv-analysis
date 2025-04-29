@@ -1,5 +1,5 @@
 ---
-title: Comparative analsyis of mutation load in different CRISPR edited cell lines
+title: Comparative anlysis of mutation load in different CRISPR edited cell lines
 output:
   html_document:
     df_print: paged
