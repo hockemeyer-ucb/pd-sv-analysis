@@ -1,8 +1,8 @@
 # iSCORE-PD SNV analysis
 
-This is a set of R scripts used to analyze the genotype and the potential CRISPR off-targets in the
-iSCORE-PD cell line collections. the main document, 00_main_document_Run1and2.Rmd will generate a
-selfcontained standalone html report of the [full set of analyses](https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/pd-sv-analysis/html_output/00_main_document_Run1and2.html).
+This is a set of Rmarckdown files with scripts used to analyze the genotypes and the potential CRISPR off-targets in the
+iSCORE-PD cell line collection. the main document, 00_main_document_Run1and2.Rmd will generate a
+self-contained standalone html report of the [full set of analyses](https://pd-cell-lines-data.s3.us-west-2.amazonaws.com/pd-sv-analysis/html_output/00_main_document_Run1and2.html).
 
 ## Prerequesites
 
@@ -229,30 +229,33 @@ in the supporting_files directory will need to be updated to your design.
 
 the iSCORE-PD_design.csv file is a comma seperated text file starting with a header and with one cell line per line with the following column header:
 
-the iSCORE-PD_design.csv
+- samples: Sample ID found in VCF header of the joint genotyping output file
+- group: Group ID linking the sample in group
+- meta: Additional group relation. Not used anymore
 
 #### [iSCORE-PD_cells_grouped_by_editing_methods.csv](supporting_files/iSCORE-PD_cells_grouped_by_editing_methods.csv)
 
-The iSCORE-PD_cells_grouped_with_guides.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
+The iSCORE-PD_cells_grouped_by_editing_methods.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
 column header:
 
 - samples: Sample ID found in VCF header of the joint genotyping output file
 - group: Group ID linking the sample in group
 - meta: Additional group relation. Not used anymore
+- editing_group: Method used for the editing (Cas9, TALEN, PE)
 
 It is used to establish the sample in the VCF to the different cell line edited group. In our analysis, each CRISPR edit has serveral cell line clones.
 
 #### [iSCORE-PD_cells_grouped_with_guides.csv](supporting_files/iSCORE-PD_cells_grouped_with_guides.csv)
 
-The iSCORE-PD_cells_grouped_by_editing_methods.csv is an extention of the previous file with extra columns with the Id of the RNA guide(s)
+The iSCORE-PD_cells_grouped_with_guides.csv is an extention of the previous file with extra columns with the Id of the RNA guide(s)
 used to edit each cell lines. The two files could be consolidated but where kept seperate for the ability to change the samples analyzed
 in one or the other files. The extra columns represent the maximal number of guides used in any of the cell lines. In our case, some edits
 used up to 3 guides, so we add 3 extra columns and for each lines with list the Id of the guides used (either one, two or three guide IDs)
 
 - samples: Sample ID
 - group: Group ID
-- meta: Additional group relation
-- editing_group: Type of Cas use for CRISPR (Cas9, TALEN, PE)
+- meta: Additional group relation. Not used anymore
+- editing_group: Method used for the editing (Cas9, TALEN, PE)
 - guide1
 - guide2
 - guide3

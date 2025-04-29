@@ -1,5 +1,5 @@
 ---
-title: Comparative analysis of mutation load in different CRISPR edited cell lines in 
+title: Comparative analysis of mutation load in different CRISPR edited cell lines group by edit methods 
 output:
   html_document:
     df_print: paged
@@ -41,11 +41,14 @@ hgd()
 Let's create a table where the samples in the VCF are associated with a group representing a set
 of clones carrying the same CRISPR edit type.
 
-##### Strategy:
-1. Get the samples from one of the VCF header
-2. Define what samples are part of the parental group
-3. Rename the SNCA and VPS13C samples (in a tmp column) to seperate the different edit types
-4. Using REGEXP, assign a unique group to each sample
+##### Format:
+The iSCORE-PD_cells_grouped_by_editing_methods.csv file is a comma seperated text file starting with a header and with one cell line per line with the following
+column header:
+
+- samples: Sample ID found in VCF header of the joint genotyping output file
+- group: Group ID linking the sample in group
+- meta: Additional group relation. Not used anymore
+- editing_group: Method used for the editing (Cas9, TALEN, PE)
 
 ```{r}
 ## Set a table of sample to group from one of the VCF file
